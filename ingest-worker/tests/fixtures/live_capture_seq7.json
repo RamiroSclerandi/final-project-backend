@@ -1,0 +1,5 @@
+{"v":1,"dev":"4022D83D6618","ts":1788803329,"seq":7,
+ "meta":{"rssi":-58,"fw":"1.1.0","boot":15,"ts_src":"device",
+         "store":{"k":"littlefs","pct":0,"pend":0,"drop":0}},
+ "ch":[{"c":"temperature","u":"degC","ok":true,"src":"BMP280","val":20.9},
+       {"c":"pressure","u":"hPa","ok":true,"src":"BMP280","val":1011.434}]}
