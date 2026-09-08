@@ -27,3 +27,6 @@ Thumbs.db
 
 # Agent tooling
 .atl/
+
+# Local reference documents, intentionally untracked
+docs/
