@@ -191,3 +191,40 @@ def test_conflicting_insert_that_returns_no_row_is_recovered_by_reselecting() ->
 
     key = next(iter(store.sensors))
     assert store.sensors[key].id == sensor_id
+
+
+def test_expected_range_returns_thresholds_from_the_sensor_type() -> None:
+    store = FakeRegistryStore()
+    store.sensor_types[("temperature", "C")] = SensorTypeRecord(
+        id="type-1", name="temperature", unit="C", expected_min=-40.0, expected_max=85.0
+    )
+    registry = Registry(store, ttl_seconds=900)
+
+    expected_min, expected_max = registry.expected_range("temperature", "C")
+
+    assert (expected_min, expected_max) == (-40.0, 85.0)
+
+
+def test_expected_range_is_none_for_a_sensor_type_with_no_configured_thresholds() -> None:
+    store = FakeRegistryStore()
+    registry = Registry(store, ttl_seconds=900)
+    reading = _make_reading()
+    registry.resolve(reading)  # auto-registers "temperature"/"C" with no thresholds
+
+    expected_min, expected_max = registry.expected_range("temperature", "C")
+
+    assert (expected_min, expected_max) == (None, None)
+
+
+def test_expected_range_is_cached_and_issues_no_further_queries_within_the_ttl() -> None:
+    store = FakeRegistryStore()
+    store.sensor_types[("temperature", "C")] = SensorTypeRecord(
+        id="type-1", name="temperature", unit="C", expected_min=-40.0, expected_max=85.0
+    )
+    registry = Registry(store, ttl_seconds=900)
+    registry.expected_range("temperature", "C")
+    queries_after_first = store.query_count
+
+    registry.expected_range("temperature", "C")
+
+    assert store.query_count == queries_after_first
