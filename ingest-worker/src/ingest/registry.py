@@ -29,11 +29,19 @@ class DeviceRecord:
 
 @dataclass(frozen=True)
 class SensorTypeRecord:
-    """One row of `sensor_types`, narrowed to what resolution needs."""
+    """One row of `sensor_types`, narrowed to what resolution needs.
+
+    `expected_min`/`expected_max` are the quality-banding thresholds the
+    sink (Phase 8) compares each reading against (SDD section 5.4). They
+    are editable through the web platform, so a cached record can lag a
+    threshold edit by up to one TTL — see `Registry.expected_range`.
+    """
 
     id: str
     name: str
     unit: str
+    expected_min: float | None = None
+    expected_max: float | None = None
 
 
 @dataclass(frozen=True)
@@ -95,16 +103,22 @@ class Registry:
     architecture diagram in sdd/worker-ingesta-mqtt/design). It takes no
     lock and is not safe for concurrent use from more than one thread.
 
-    Cache scope: only the resolved `sensor_id` is cached, keyed by
-    `(mac, channel, unit, tag, source)` — never `devices.name`,
-    `sensor_types.expected_min/max`, or any other mutable column, because
+    Cache scope: the resolved `sensor_id` is cached, keyed by
+    `(mac, channel, unit, tag, source)`; `devices.name` and every other
+    mutable column besides sensor-type thresholds are never cached, because
     the web platform's UI can edit those columns concurrently while ids are
     immutable by construction. A cached id is trusted for `ttl_seconds`
     (`REGISTRY_CACHE_TTL_S`); after that it expires and resolution runs
     again. This bounds the one real staleness risk of caching an id at all —
     that the row was deleted through the web platform in the meantime — to
-    at most one TTL window. A rename or a threshold edit is never stale
-    here, because this cache never reads those columns in the first place.
+    at most one TTL window.
+
+    A second, separate TTL-bound cache holds the resolved `SensorTypeRecord`
+    (including `expected_min`/`expected_max`) keyed by `(name, unit)` — the
+    design's documented side cache. Its thresholds ARE mutable through the
+    web platform, so quality banding (`expected_range`) can be stale for up
+    to one TTL window after a threshold edit. Accepted and documented, same
+    as the design's risk list: ids themselves cannot go stale this way.
     """
 
     def __init__(
@@ -117,6 +131,7 @@ class Registry:
         self._ttl_seconds = ttl_seconds
         self._clock = clock
         self._cache: dict[_CacheKey, tuple[str, float]] = {}
+        self._sensor_type_cache: dict[tuple[str, str], tuple[SensorTypeRecord, float]] = {}
 
     def resolve(self, reading: Reading) -> str:
         """Resolve one `Reading` to its `sensor_id`, registering as needed.
@@ -139,6 +154,25 @@ class Registry:
         self._cache[key] = (sensor.id, self._clock())
         return sensor.id
 
+    def expected_range(self, channel: str, unit: str) -> tuple[float | None, float | None]:
+        """Return the accepted `[expected_min, expected_max]` range for a channel/unit.
+
+        Used by the sink (Phase 8) for quality banding (SDD section 5.4).
+        Backed by the same TTL-bound `sensor_types` cache `resolve()`
+        populates, so calling this after `resolve()` for the same channel
+        issues no further query.
+
+        Args:
+            channel: `sensor_types.name` — same value as `Reading.channel`.
+            unit: `sensor_types.unit`.
+
+        Returns:
+            `(expected_min, expected_max)`, either or both `None` when the
+            sensor type has no configured threshold.
+        """
+        sensor_type = self._resolve_sensor_type(channel, unit)
+        return (sensor_type.expected_min, sensor_type.expected_max)
+
     def _cached(self, key: _CacheKey) -> str | None:
         entry = self._cache.get(key)
         if entry is None:
@@ -156,6 +190,19 @@ class Registry:
         return self._store.insert_device(mac_address, name=f"Nodo {mac_address}")
 
     def _resolve_sensor_type(self, name: str, unit: str) -> SensorTypeRecord:
+        key = (name, unit)
+        cached = self._sensor_type_cache.get(key)
+        if cached is not None:
+            record, cached_at = cached
+            if self._clock() - cached_at < self._ttl_seconds:
+                return record
+            del self._sensor_type_cache[key]
+
+        record = self._fetch_sensor_type(name, unit)
+        self._sensor_type_cache[key] = (record, self._clock())
+        return record
+
+    def _fetch_sensor_type(self, name: str, unit: str) -> SensorTypeRecord:
         existing = self._store.select_sensor_type(name, unit)
         if existing is not None:
             return existing
