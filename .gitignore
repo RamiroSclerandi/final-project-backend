@@ -28,8 +28,9 @@ Thumbs.db
 # Agent tooling
 .atl/
 
-# Local reference documents, intentionally untracked
-docs/
+# Local reference documents at the repository root, intentionally untracked.
+# Anchored: an unanchored rule would also swallow ingest-worker/docs/.
+/docs/
 
 # Supabase local state, not the schema
 supabase/.temp/
