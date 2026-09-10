@@ -18,8 +18,16 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from ingest.registry import DeviceRecord, Registry, SensorRecord, SensorTypeRecord
-from ingest.sink.supabase_sink import MeasurementSink, SinkPermanentError, SinkTransientError
+from ingest.sink.supabase_sink import (
+    MeasurementSink,
+    SinkPermanentError,
+    SinkTransientError,
+    build_raw_message_row,
+    record_from_row,
+)
 from ingest.sources.base import DeviceStatus, InboundMessage
 
 RECEIVED_AT = datetime(2026, 9, 9, 12, 0, 0, tzinfo=UTC)
@@ -126,7 +134,12 @@ class FakeSinkStore:
     transient/permanent write failures without a real network call.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, known_devices: dict[str, DeviceRecord] | None = None) -> None:
+        # Mirrors a real UPDATE: a row that does not exist is not created and
+        # the write is silently lost. Without this, a status update for an
+        # unregistered device looks successful in tests and vanishes in
+        # production, which is exactly what happened against the real schema.
+        self.known_devices = known_devices if known_devices is not None else {}
         self.raw_messages: list[dict[str, Any]] = []
         self.measurements: dict[tuple[str, str], dict[str, Any]] = {}
         self.upsert_calls: list[list[dict[str, Any]]] = []
@@ -155,6 +168,8 @@ class FakeSinkStore:
         return written
 
     def update_device_status(self, device_mac: str, online: bool, at: datetime) -> None:
+        if device_mac not in self.known_devices:
+            return
         self.device_status[device_mac] = online
 
     def update_device_last_seen(
@@ -172,8 +187,9 @@ def _make_sink(
     clock: FakeClock | None = None,
 ) -> tuple[MeasurementSink, FakeSinkStore]:
     clock = clock or FakeClock()
-    sink_store = sink_store if sink_store is not None else FakeSinkStore()
-    registry = Registry(registry_store or FakeRegistryStore(), ttl_seconds=900, clock=clock)
+    registry_store = registry_store or FakeRegistryStore()
+    sink_store = sink_store if sink_store is not None else FakeSinkStore(registry_store.devices)
+    registry = Registry(registry_store, ttl_seconds=900, clock=clock)
     sink = MeasurementSink(
         store=sink_store,
         registry=registry,
@@ -331,3 +347,100 @@ def test_a_transient_failure_that_persists_through_every_retry_is_counted_as_fai
     assert len(store.upsert_calls) == 4
     assert sink.batch_retries_count == 3
     assert sink.batch_failed_count == 1
+
+
+# --- Row shape against the real schema ---
+#
+# `SupabaseStore` is deliberately not exercised against a live project, so a
+# column the schema requires and the code never sets is invisible to every
+# test above: the in-memory fakes accept any dictionary. `raw_messages.source`
+# was exactly that, and it only surfaced when the worker ran against the real
+# database. These tests cover the row-building itself.
+
+RAW_MESSAGE_REQUIRED_COLUMNS = {"topic", "payload", "source"}
+RAW_MESSAGE_SOURCES = {"hivemq", "ttn", "chirpstack", "http"}
+
+
+def test_archived_row_carries_every_column_the_schema_requires() -> None:
+    row = build_raw_message_row(
+        topic="dl/v1/4022D83D6618/data",
+        payload=b'{"v":1}',
+        received_at=datetime(2026, 9, 10, 12, 0, tzinfo=UTC),
+        error=None,
+        source="hivemq",
+    )
+
+    missing = RAW_MESSAGE_REQUIRED_COLUMNS - row.keys()
+
+    assert not missing, f"raw_messages NOT NULL columns never set: {sorted(missing)}"
+    assert all(row[column] is not None for column in RAW_MESSAGE_REQUIRED_COLUMNS)
+
+
+def test_archived_row_source_is_one_the_check_constraint_admits() -> None:
+    row = build_raw_message_row(
+        topic="dl/v1/4022D83D6618/data",
+        payload=b'{"v":1}',
+        received_at=datetime(2026, 9, 10, 12, 0, tzinfo=UTC),
+        error=None,
+        source="hivemq",
+    )
+
+    assert row["source"] in RAW_MESSAGE_SOURCES
+
+
+def test_a_malformed_payload_is_still_archived_with_its_error_and_not_processed() -> None:
+    row = build_raw_message_row(
+        topic="dl/v1/4022D83D6618/data",
+        payload=b"not json",
+        received_at=datetime(2026, 9, 10, 12, 0, tzinfo=UTC),
+        error="boom",
+        source="hivemq",
+    )
+
+    assert row["error"] == "boom"
+    assert row["processed"] is False
+    assert row["payload"] == "not json"
+
+
+def test_a_row_with_columns_the_record_does_not_declare_is_still_accepted() -> None:
+    # PostgREST returns every column of an inserted row, and the schema grows
+    # columns the worker never asked for. Splatting the row straight into a
+    # dataclass broke on `sensors.label` the first time the worker met the
+    # real database.
+    row = {
+        "id": "s-1",
+        "device_id": "d-1",
+        "type_id": "t-1",
+        "source": "BMP280",
+        "tag": "",
+        "label": "a column this record does not declare",
+        "created_at": "2026-09-10T12:00:00+00:00",
+    }
+
+    record = record_from_row(SensorRecord, row)
+
+    assert record.id == "s-1"
+    assert record.source == "BMP280"
+
+
+def test_a_row_missing_a_column_the_record_requires_still_fails_loudly() -> None:
+    row = {"id": "s-1", "device_id": "d-1"}
+
+    with pytest.raises(TypeError):
+        record_from_row(SensorRecord, row)
+
+
+def test_a_status_for_an_unregistered_device_registers_it_before_updating() -> None:
+    # The retained status arrives when the worker subscribes, before any data
+    # message has registered the device. Updating a row that does not exist
+    # yet loses the update silently, and the device stays at the schema
+    # default until it happens to reconnect.
+    registry_store = FakeRegistryStore()
+    sink, store = _make_sink(registry_store=registry_store)
+
+    sink.handle_status(
+        DeviceStatus(device_mac="AABBCCDDEEFF", online=True, received_at=RECEIVED_AT)
+    )
+
+    assert "AABBCCDDEEFF" in registry_store.devices
+    assert store.device_status["AABBCCDDEEFF"] is True
