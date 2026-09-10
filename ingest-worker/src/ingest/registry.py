@@ -173,6 +173,22 @@ class Registry:
         sensor_type = self._resolve_sensor_type(channel, unit)
         return (sensor_type.expected_min, sensor_type.expected_max)
 
+    def ensure_device(self, mac_address: str) -> str:
+        """Resolve a device by MAC, registering it if unseen.
+
+        A retained status message arrives the moment the worker subscribes,
+        before any data message has registered the device. Updating a row
+        that does not exist yet is silently lost, so the device stays at the
+        schema's default until it happens to reconnect.
+
+        Args:
+            mac_address: The device MAC as it appears on the topic.
+
+        Returns:
+            The id of the `devices` row.
+        """
+        return self._resolve_device(mac_address).id
+
     def _cached(self, key: _CacheKey) -> str | None:
         entry = self._cache.get(key)
         if entry is None:

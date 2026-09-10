@@ -26,6 +26,7 @@ branch: whole-batch replay is idempotent under either outcome.
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -70,6 +71,64 @@ class SinkTransientError(Exception):
 
 class SinkPermanentError(Exception):
     """A batch write failed for a reason retry will not fix (a 4xx response)."""
+
+
+def record_from_row[RecordT](record_type: type[RecordT], row: dict[str, Any]) -> RecordT:
+    """Build a record from a database row, ignoring columns it does not declare.
+
+    PostgREST returns every column of an inserted row, and the schema carries
+    columns the worker never asks for. Splatting a row straight into a
+    dataclass therefore breaks the first time someone adds a column — which
+    is how `sensors.label` stopped ingestion dead. A row missing a field the
+    record requires still raises, because that is a real mismatch.
+
+    Args:
+        record_type: The dataclass to build.
+        row: The row as PostgREST returned it.
+
+    Returns:
+        The record, built from the fields it declares.
+    """
+    declared = {field.name for field in fields(record_type)}  # type: ignore[arg-type]
+    return record_type(**{key: value for key, value in row.items() if key in declared})
+
+
+def build_raw_message_row(
+    *,
+    topic: str,
+    payload: bytes,
+    received_at: datetime,
+    error: str | None,
+    source: str,
+) -> dict[str, Any]:
+    """Build one `raw_messages` row.
+
+    Kept separate from the store so the row's shape can be checked without a
+    live database. `source` is NOT NULL and constrained to a known transport,
+    and it was omitted here until the worker first ran against the real
+    schema — the in-memory fakes accept any dictionary, so no unit test could
+    have caught it.
+
+    Args:
+        topic: The MQTT topic the message arrived on.
+        payload: The raw bytes, decoded permissively so an undecodable
+            message is still archived rather than lost.
+        received_at: Server arrival time.
+        error: The validation error, when the payload did not parse.
+        source: The transport that delivered it, one of the values
+            `raw_messages_source_valid` admits.
+
+    Returns:
+        The row to insert.
+    """
+    return {
+        "topic": topic,
+        "payload": payload.decode("utf-8", errors="replace"),
+        "received_at": received_at.isoformat(),
+        "error": error,
+        "processed": error is None,
+        "source": source,
+    }
 
 
 class SinkStore(Protocol):
@@ -223,6 +282,7 @@ class MeasurementSink:
         change is rare (one per connect/disconnect) and every one must be
         visible.
         """
+        self._registry.ensure_device(status.device_mac)
         self._store.update_device_status(status.device_mac, status.online, status.received_at)
 
     def flush_if_due(self) -> None:
@@ -290,8 +350,9 @@ class SupabaseStore:
     tests/test_registry.py), never a live Supabase project.
     """
 
-    def __init__(self, client: "Client") -> None:
+    def __init__(self, client: "Client", source: str = "hivemq") -> None:
         self._client = client
+        self._source = source
 
     # --- RegistryStore ---
 
@@ -323,7 +384,7 @@ class SupabaseStore:
             .execute()
             .data
         )
-        return SensorTypeRecord(**_row(rows[0])) if rows else None
+        return record_from_row(SensorTypeRecord, _row(rows[0])) if rows else None
 
     def insert_sensor_type(self, name: str, unit: str) -> SensorTypeRecord | None:
         rows = (
@@ -332,7 +393,7 @@ class SupabaseStore:
             .execute()
             .data
         )
-        return SensorTypeRecord(**_row(rows[0])) if rows else None
+        return record_from_row(SensorTypeRecord, _row(rows[0])) if rows else None
 
     def select_sensor(
         self, device_id: str, type_id: str, source: str, tag: str
@@ -347,7 +408,7 @@ class SupabaseStore:
             .execute()
             .data
         )
-        return SensorRecord(**_row(rows[0])) if rows else None
+        return record_from_row(SensorRecord, _row(rows[0])) if rows else None
 
     def insert_sensor(
         self, device_id: str, type_id: str, source: str, tag: str
@@ -362,7 +423,7 @@ class SupabaseStore:
             .execute()
             .data
         )
-        return SensorRecord(**_row(rows[0])) if rows else None
+        return record_from_row(SensorRecord, _row(rows[0])) if rows else None
 
     # --- SinkStore ---
 
@@ -370,13 +431,13 @@ class SupabaseStore:
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
     ) -> None:
         self._client.table("raw_messages").insert(
-            {
-                "topic": topic,
-                "payload": payload.decode("utf-8", errors="replace"),
-                "received_at": received_at.isoformat(),
-                "error": error,
-                "processed": error is None,
-            }
+            build_raw_message_row(
+                topic=topic,
+                payload=payload,
+                received_at=received_at,
+                error=error,
+                source=self._source,
+            )
         ).execute()
 
     def upsert_measurements(self, rows: list[dict[str, Any]]) -> int:
