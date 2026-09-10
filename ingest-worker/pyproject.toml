@@ -18,6 +18,7 @@ dev = [
   "pytest-cov>=5",
   "ruff>=0.6",
   "mypy>=1.11",
+  "testcontainers>=4.15.0",
 ]
 
 [build-system]
@@ -29,6 +30,10 @@ packages = ["src/ingest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "integration: exercises a real, ephemeral Postgres + PostgREST pair (requires Docker)",
+]
+addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 100
