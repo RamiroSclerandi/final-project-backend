@@ -45,7 +45,8 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-uv run pytest -q          # 107 tests, no live broker or database required
+uv run pytest -q          # 113 unit tests, no live broker or database required
+uv run pytest -m integration -q   # 6 integration tests, needs a container runtime
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
