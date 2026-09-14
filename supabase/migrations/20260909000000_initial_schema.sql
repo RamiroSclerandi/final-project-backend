@@ -188,11 +188,11 @@ CREATE TABLE measurements (
 
     metadata      JSONB,
 
-    -- Idempotencia: MQTT QoS 1 entrega al menos una vez, y el replay desde
-    -- almacenamiento local reenvía a propósito. Junto con ON CONFLICT DO
-    -- NOTHING en el worker, los duplicados se descartan en la base.
-    -- Solo funciona porque el timestamp lo pone el dispositivo: con
-    -- DEFAULT NOW() cada reintento generaría una marca distinta.
+    -- Idempotency: the firmware publishes at MQTT QoS 0 (no delivery
+    -- guarantee); duplicates come from the local-buffer replay intentionally
+    -- resending. Combined with ON CONFLICT DO NOTHING in the worker, replay
+    -- duplicates are dropped here. This only works because the device sets
+    -- the timestamp -- DEFAULT NOW() would give each retry a different value.
     CONSTRAINT measurements_unique_reading UNIQUE (sensor_id, timestamp),
 
     CONSTRAINT measurements_ts_source_valid CHECK (ts_source IN ('device', 'server')),
@@ -263,7 +263,9 @@ CREATE INDEX idx_raw_messages_failed
 
 -- Último valor por sensor. Es la consulta más frecuente del dashboard.
 -- DISTINCT ON resuelve el "último por grupo" apoyándose en idx_measurements_sensor_time.
-CREATE OR REPLACE VIEW v_latest_readings AS
+CREATE OR REPLACE VIEW v_latest_readings
+WITH (security_invoker = on)
+AS
 SELECT DISTINCT ON (m.sensor_id)
     m.sensor_id,
     m.value,
