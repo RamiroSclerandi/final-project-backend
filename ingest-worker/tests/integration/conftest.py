@@ -1,8 +1,8 @@
 """Integration-test harness: a real, ephemeral Postgres + PostgREST pair.
 
-Applies the actual migration and seed (never a rewritten copy of the schema)
-against a bare `postgres:16` container, then serves it through a real
-PostgREST container so tests exercise `SupabaseStore`/`MeasurementSink`
+Applies the actual migrations and seed (never a rewritten copy of the
+schema) against a bare `postgres:16` container, then serves it through a
+real PostgREST container so tests exercise `SupabaseStore`/`MeasurementSink`
 against the same HTTP interface the worker uses in production. A
 Postgres-only harness would never catch a defect that lives in how
 PostgREST reshapes a row (the `sensors.label` column) or in the write
@@ -11,14 +11,21 @@ zero-row UPDATE returning 200) -- see tests/integration/test_supabase_store.py
 and tests/integration/test_measurement_sink.py for the three production
 defects this suite guards against.
 
+Migration order: the base schema migration always applies first, then
+01_simulate_cloud_default_exposure.sql reproduces the Supabase Cloud
+platform default this bare image does not have for free, then every other
+migration under supabase/migrations/ applies in filename order -- so a
+later relation-exposure fix lands, and is asserted, on top of that simulated
+default rather than before it. See tests/integration/test_relation_exposure.py.
+
 Auth choice: supabase-py always sends `apikey`/`Authorization: Bearer <jwt>`
 headers, and the worker always authenticates as `service_role` in
 production. Rather than granting the anonymous role write access it should
 never have (the real migration's RLS policies grant `authenticated` read
 only, and no role an INSERT/UPDATE policy at all), PostgREST is configured
-with a JWT secret and every test mints its own `service_role`-claim token
-signed with it -- the same mechanism a real Supabase service_role key uses,
-just minted locally instead of issued by the platform.
+with a JWT secret and every test mints its own role-claim token signed with
+it -- the same mechanism a real Supabase key uses, just minted locally
+instead of issued by the platform.
 """
 
 import base64
@@ -27,7 +34,7 @@ import hmac
 import json
 import secrets
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -41,7 +48,8 @@ from ingest.sink.supabase_sink import SupabaseStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SQL_DIR = Path(__file__).resolve().parent / "sql"
-_MIGRATION_PATH = _REPO_ROOT / "supabase" / "migrations" / "20260909000000_initial_schema.sql"
+_MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"
+_BASE_MIGRATION_PATH = _MIGRATIONS_DIR / "20260909000000_initial_schema.sql"
 _SEED_PATH = _REPO_ROOT / "supabase" / "seed.sql"
 
 _POSTGRES_ALIAS = "postgres"
@@ -97,8 +105,13 @@ def _mint_jwt(secret: str, role: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def _postgrest_endpoint() -> Iterator[tuple[str, str]]:
-    """Start an ephemeral Postgres + PostgREST pair; yield `(base_url, jwt_secret)`.
+def _postgrest_endpoint() -> Iterator[tuple[str, str, PostgresContainer]]:
+    """Start an ephemeral Postgres + PostgREST pair.
+
+    Yields `(base_url, jwt_secret, postgres_container)`. The container
+    reference is exposed so tests can read catalog state PostgREST does not
+    serve over its data API, such as a relation's `reloptions` (see the
+    `view_reloptions` fixture).
 
     Session-scoped: container startup dominates this suite's runtime, and
     every test uses a fresh device MAC / sensor tag / timestamp instead of a
@@ -118,10 +131,22 @@ def _postgrest_endpoint() -> Iterator[tuple[str, str]]:
                 (_SQL_DIR / "00_bootstrap_auth.sql").read_bytes(),
                 "/tmp/00_bootstrap_auth.sql",
             )
-            _run_sql_file(postgres, _MIGRATION_PATH.read_bytes(), "/tmp/10_migration.sql")
+            _run_sql_file(postgres, _BASE_MIGRATION_PATH.read_bytes(), "/tmp/10_base_migration.sql")
+            _run_sql_file(
+                postgres,
+                (_SQL_DIR / "01_simulate_cloud_default_exposure.sql").read_bytes(),
+                "/tmp/11_simulate_cloud_default_exposure.sql",
+            )
+            later_migrations = sorted(
+                p for p in _MIGRATIONS_DIR.glob("*.sql") if p != _BASE_MIGRATION_PATH
+            )
+            for index, migration_path in enumerate(later_migrations):
+                _run_sql_file(
+                    postgres, migration_path.read_bytes(), f"/tmp/12_migration_{index}.sql"
+                )
             _run_sql_file(postgres, _SEED_PATH.read_bytes(), "/tmp/20_seed.sql")
             roles_sql = (
-                (_SQL_DIR / "01_postgrest_roles.sql")
+                (_SQL_DIR / "02_postgrest_roles.sql")
                 .read_text()
                 .replace("__AUTHENTICATOR_PASSWORD__", authenticator_password)
             )
@@ -144,12 +169,11 @@ def _postgrest_endpoint() -> Iterator[tuple[str, str]]:
             with postgrest:
                 host = postgrest.get_container_host_ip()
                 port = postgrest.get_exposed_port(_POSTGREST_PORT)
-                yield f"http://{host}:{port}", jwt_secret
+                yield f"http://{host}:{port}", jwt_secret, postgres
 
 
-@pytest.fixture
-def service_role_client(_postgrest_endpoint: tuple[str, str]) -> Client:
-    """A real `supabase.Client`, authenticated as `service_role`, against the live PostgREST.
+def _client_for_role(base_url: str, jwt_secret: str, role: str) -> Client:
+    """Build a real `supabase.Client` carrying a minted `role` claim, against the live PostgREST.
 
     supabase-py always targets `<base_url>/rest/v1`, which only exists
     behind Supabase's Kong gateway. There is no gateway in this harness --
@@ -157,11 +181,64 @@ def service_role_client(_postgrest_endpoint: tuple[str, str]) -> Client:
     client is repointed at that root; `.table()`/`.postgrest` are otherwise
     untouched real supabase-py/postgrest-py code making real HTTP calls.
     """
-    base_url, jwt_secret = _postgrest_endpoint
-    token = _mint_jwt(jwt_secret, role="service_role")
+    token = _mint_jwt(jwt_secret, role=role)
     client = create_client(base_url, token)
     client.rest_url = base_url  # type: ignore[assignment]
     return client
+
+
+@pytest.fixture
+def service_role_client(_postgrest_endpoint: tuple[str, str, PostgresContainer]) -> Client:
+    """A real `supabase.Client`, authenticated as `service_role`, against the live PostgREST."""
+    base_url, jwt_secret, _postgres = _postgrest_endpoint
+    return _client_for_role(base_url, jwt_secret, role="service_role")
+
+
+@pytest.fixture
+def anon_client(_postgrest_endpoint: tuple[str, str, PostgresContainer]) -> Client:
+    """A real `supabase.Client`, authenticated as `anon`, against the live PostgREST."""
+    base_url, jwt_secret, _postgres = _postgrest_endpoint
+    return _client_for_role(base_url, jwt_secret, role="anon")
+
+
+@pytest.fixture
+def authenticated_client(_postgrest_endpoint: tuple[str, str, PostgresContainer]) -> Client:
+    """A real `supabase.Client`, authenticated as `authenticated`, against the live PostgREST."""
+    base_url, jwt_secret, _postgres = _postgrest_endpoint
+    return _client_for_role(base_url, jwt_secret, role="authenticated")
+
+
+@pytest.fixture
+def view_reloptions(
+    _postgrest_endpoint: tuple[str, str, PostgresContainer],
+) -> Callable[[str], str]:
+    """Return a function reading a relation's `reloptions` via `psql`.
+
+    PostgREST only serves the `public` schema's data API, never
+    `pg_catalog`, so a reloption like `security_invoker` is unreachable
+    through any `Client` fixture above -- this reads it directly from the
+    same Postgres container, the same way `_run_sql_file` applies DDL.
+    """
+    _base_url, _jwt_secret, postgres = _postgrest_endpoint
+
+    def _read(relname: str) -> str:
+        escaped_password = postgres.password.replace("'", "'\"'\"'")
+        query = f"SELECT coalesce(reloptions::text, '') FROM pg_class WHERE relname = '{relname}'"
+        result = postgres.exec(
+            [
+                "sh",
+                "-c",
+                f"PGPASSWORD='{escaped_password}' psql --username {postgres.username} "
+                f'--dbname {postgres.dbname} --host 127.0.0.1 -tAc "{query}"',
+            ]
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(
+                f"reading reloptions for {relname} failed:\n{result.output.decode()}"
+            )
+        return result.output.decode().strip()
+
+    return _read
 
 
 @pytest.fixture
