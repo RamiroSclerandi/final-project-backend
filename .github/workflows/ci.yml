@@ -54,3 +54,29 @@ jobs:
 
       - name: Integration tests
         run: uv run pytest -m integration -q
+
+  functions:
+    name: Edge Functions (Deno)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supabase/functions
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format check
+        run: deno fmt --check
+
+      - name: Lint
+        run: deno lint
+
+      - name: Type check
+        run: deno check set-sampling-interval/index.ts
+
+      - name: Unit tests
+        run: deno test --allow-env --allow-net set-sampling-interval/
