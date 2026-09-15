@@ -236,3 +236,42 @@ Deno.test("returns 200 with the confirmed configuration on success", async () =>
   assertEquals(publishedMs, 5000);
   assertEquals(upsertCalls[0].device_id, DEVICE_ID);
 });
+
+Deno.test("answers a CORS preflight without touching the database", async () => {
+  let clientBuilt = false;
+  const handle = createHandler({
+    createCallerClient: () => {
+      clientBuilt = true;
+      throw new Error("must not be called");
+    },
+    publishSamplingInterval: () => Promise.resolve(),
+  });
+
+  const res = await handle(
+    new Request("http://localhost/set-sampling-interval", {
+      method: "OPTIONS",
+    }),
+  );
+
+  assertEquals(res.status, 204);
+  assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*");
+  assertEquals(
+    res.headers.get("Access-Control-Allow-Headers")?.includes("authorization"),
+    true,
+  );
+  assertEquals(clientBuilt, false);
+});
+
+Deno.test("every JSON response carries the CORS origin header", async () => {
+  const { client } = buildFakeClient({ device: { mac_address: VALID_MAC } });
+  const handle = createHandler({
+    createCallerClient: () => client,
+    publishSamplingInterval: () => Promise.resolve(),
+  });
+
+  const res = await handle(
+    buildRequest({ deviceId: DEVICE_ID, samplingIntervalMs: 5000 }),
+  );
+
+  assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*");
+});
