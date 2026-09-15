@@ -1,0 +1,3 @@
+# Check out every text file with LF regardless of core.autocrlf, so deno fmt,
+# ruff format and git status agree on Windows and Linux alike.
+* text=auto eol=lf

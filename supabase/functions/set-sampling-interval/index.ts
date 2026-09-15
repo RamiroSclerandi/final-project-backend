@@ -35,16 +35,27 @@ interface Deps {
   ) => Promise<void>;
 }
 
+// The JWT is the access boundary; the browser only needs the preflight to pass.
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
 /** Builds the request handler with its collaborators injected, so tests never touch the network. */
 export function createHandler(deps: Deps) {
   return async function handleRequest(req: Request): Promise<Response> {
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
     if (req.method !== "POST") {
       return jsonResponse({ error: "method not allowed" }, 400);
     }
