@@ -109,3 +109,39 @@ Deno.test("publishSamplingInterval rejects when broker env vars are missing", as
     },
   );
 });
+
+function connectCapturingUrl(seen: string[]) {
+  const inner = fakeConnect(() => undefined);
+  // deno-lint-ignore no-explicit-any
+  return (url: string, ...rest: any[]) => {
+    seen.push(url);
+    return inner(url, ...rest);
+  };
+}
+
+Deno.test("publishSamplingInterval uses MQTT_WS_URL verbatim when set", async () => {
+  await withEnv(
+    { ...BROKER_ENV, MQTT_WS_URL: "ws://mosquitto:9001" },
+    async () => {
+      const seen: string[] = [];
+      await publishSamplingInterval(
+        "4022D83D6618",
+        15000,
+        connectCapturingUrl(seen) as any,
+      );
+      assertEquals(seen, ["ws://mosquitto:9001"]);
+    },
+  );
+});
+
+Deno.test("publishSamplingInterval composes wss from host and port without MQTT_WS_URL", async () => {
+  await withEnv(BROKER_ENV, async () => {
+    const seen: string[] = [];
+    await publishSamplingInterval(
+      "4022D83D6618",
+      15000,
+      connectCapturingUrl(seen) as any,
+    );
+    assertEquals(seen, ["wss://broker.example.com:8884/mqtt"]);
+  });
+});

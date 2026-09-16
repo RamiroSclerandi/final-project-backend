@@ -8,6 +8,16 @@ const PUBLISH_TIMEOUT_MS = 15_000;
 
 const topicFor = (mac: string) => `dl/v1/${mac}/config`;
 
+// A full MQTT_WS_URL lets a test stack point at a plain ws:// broker on the
+// container network; production keeps composing the TLS HiveMQ endpoint.
+function brokerUrl(): string | undefined {
+  const explicit = Deno.env.get("MQTT_WS_URL");
+  if (explicit) return explicit;
+  const host = Deno.env.get("MQTT_HOST");
+  const port = Deno.env.get("MQTT_WS_PORT");
+  return host && port ? `wss://${host}:${port}/mqtt` : undefined;
+}
+
 /**
  * Publishes the validated sampling interval to the device's fixed config topic.
  * `connect` defaults to the real broker client; tests supply a fake one here —
@@ -18,16 +28,14 @@ export async function publishSamplingInterval(
   samplingIntervalMs: number,
   connect: typeof mqtt.connect = mqtt.connect,
 ): Promise<void> {
-  const host = Deno.env.get("MQTT_HOST");
-  const port = Deno.env.get("MQTT_WS_PORT");
   const username = Deno.env.get("MQTT_USER");
   const password = Deno.env.get("MQTT_PASSWORD");
+  const url = brokerUrl();
 
-  if (!host || !port || !username || !password) {
+  if (!url || !username || !password) {
     throw new Error("missing MQTT broker configuration");
   }
 
-  const url = `wss://${host}:${port}/mqtt`;
   const payload = JSON.stringify({ samplingInterval: samplingIntervalMs });
 
   await new Promise<void>((resolve, reject) => {
