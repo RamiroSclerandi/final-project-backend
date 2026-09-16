@@ -127,6 +127,7 @@ Deno.test("publishSamplingInterval uses MQTT_WS_URL verbatim when set", async ()
       await publishSamplingInterval(
         "4022D83D6618",
         15000,
+        // deno-lint-ignore no-explicit-any
         connectCapturingUrl(seen) as any,
       );
       assertEquals(seen, ["ws://mosquitto:9001"]);
@@ -140,6 +141,7 @@ Deno.test("publishSamplingInterval composes wss from host and port without MQTT_
     await publishSamplingInterval(
       "4022D83D6618",
       15000,
+      // deno-lint-ignore no-explicit-any
       connectCapturingUrl(seen) as any,
     );
     assertEquals(seen, ["wss://broker.example.com:8884/mqtt"]);
