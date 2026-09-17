@@ -67,7 +67,7 @@ jobs:
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.x
+          deno-version: 2.9.6
 
       - name: Format check
         run: deno fmt --check
