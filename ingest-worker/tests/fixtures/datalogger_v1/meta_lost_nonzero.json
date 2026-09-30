@@ -1,0 +1,1 @@
+{"v":1,"dev":"AABBCCDDEEFF","ts":1700000000,"seq":42,"meta":{"rssi":-55,"fw":"1.2.0","boot":1,"lost":3,"ts_src":"device"},"ch":[{"c":"temperature","u":"degC","ok":true,"src":"TestSensor","val":21.5},{"c":"pressure","u":"hPa","ok":false,"src":"TestSensor"}]}

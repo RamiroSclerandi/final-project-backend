@@ -152,3 +152,39 @@ def test_rejects_min_max_without_n() -> None:
 
     with pytest.raises(ValidationError, match=r"require ch\[\]\.n"):
         DataloggerV1.model_validate(envelope)
+
+
+# Firmware contract fixtures, vendored verbatim from proyecto-final-esp
+# test/fixtures/datalogger.v1/ (main 4d45e02). They omit `meta.store` by design.
+@pytest.mark.parametrize(
+    ("name", "lost"),
+    [("valid.json", 0), ("meta_lost_zero.json", 0), ("meta_lost_nonzero.json", 3)],
+)
+def test_accepts_firmware_contract_fixture(name: str, lost: int) -> None:
+    payload = DataloggerV1.model_validate(_load_fixture(f"datalogger_v1/{name}"))
+
+    assert payload.meta.lost == lost
+    assert payload.meta.store is None
+
+
+def test_meta_lost_defaults_to_zero_for_firmware_1_1_0() -> None:
+    payload = DataloggerV1.model_validate(_load_fixture("no_aggregation.json"))
+
+    assert payload.meta.lost == 0
+    assert payload.meta.store is not None
+
+
+def test_rejects_negative_meta_lost() -> None:
+    message = _load_fixture("datalogger_v1/valid.json")
+    message["meta"]["lost"] = -1
+
+    with pytest.raises(ValidationError):
+        DataloggerV1.model_validate(message)
+
+
+def test_rejects_unknown_meta_field() -> None:
+    message = _load_fixture("datalogger_v1/valid.json")
+    message["meta"]["unexpected"] = 1
+
+    with pytest.raises(ValidationError):
+        DataloggerV1.model_validate(message)
