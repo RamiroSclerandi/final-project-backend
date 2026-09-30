@@ -28,7 +28,7 @@ from uuid import uuid4
 
 import pytest
 
-from ingest.main import Worker, run_until_stopped
+from ingest.main import Worker, build_supabase_client, run_until_stopped
 from ingest.observability import Metrics, SeqGapTracker
 from ingest.registry import DeviceRecord, Registry, SensorRecord, SensorTypeRecord
 from ingest.sink.supabase_sink import MeasurementSink
@@ -405,3 +405,9 @@ def test_run_until_stopped_does_not_let_a_stuck_writer_keep_the_process_alive() 
     assert worker.thread.is_alive()
     assert worker.thread.daemon
     worker.release.set()
+
+
+def test_supabase_client_bounds_postgrest_calls_to_ten_seconds() -> None:
+    client = build_supabase_client("http://localhost:54321", "header.payload.signature")
+
+    assert client.postgrest.session.timeout.read == 10.0
