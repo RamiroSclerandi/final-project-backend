@@ -366,10 +366,40 @@ class _RefusingBroker:
         raise ConnectionRefusedError("broker unreachable")
 
 
+class _RecordingWorker:
+    """Writer stand-in that records its thread; `is_stuck` ignores shutdown requests."""
+
+    def __init__(self, *, is_stuck: bool = False) -> None:
+        self.is_stuck = is_stuck
+        self.thread: threading.Thread | None = None
+        self.shutdown_requested = threading.Event()
+        self.release = threading.Event()
+
+    def run(self) -> None:
+        self.thread = threading.current_thread()
+        (self.release if self.is_stuck else self.shutdown_requested).wait(timeout=5)
+
+    def request_shutdown(self) -> None:
+        self.shutdown_requested.set()
+
+
 def test_run_until_stopped_releases_the_writer_when_the_source_fails_to_start() -> None:
-    worker, _, _, _ = _make_worker(shutdown_grace_s=0.1)
+    worker = _RecordingWorker()
 
     with pytest.raises(ConnectionRefusedError):
         run_until_stopped(_RefusingBroker(), worker, join_timeout_s=2.0)
 
-    assert not any(t.name == "ingest-writer" for t in threading.enumerate())
+    assert worker.thread is not None
+    assert not worker.thread.is_alive()
+
+
+def test_run_until_stopped_does_not_let_a_stuck_writer_keep_the_process_alive() -> None:
+    worker = _RecordingWorker(is_stuck=True)
+
+    with pytest.raises(ConnectionRefusedError):
+        run_until_stopped(_RefusingBroker(), worker, join_timeout_s=0.05)
+
+    assert worker.thread is not None
+    assert worker.thread.is_alive()
+    assert worker.thread.daemon
+    worker.release.set()

@@ -285,13 +285,19 @@ class BlockingSource(Protocol):
     def start(self) -> None: ...
 
 
-def run_until_stopped(source: BlockingSource, worker: Worker, join_timeout_s: float) -> None:
+class Drainable(Protocol):
+    def run(self) -> None: ...
+    def request_shutdown(self) -> None: ...
+
+
+def run_until_stopped(source: BlockingSource, worker: Drainable, join_timeout_s: float) -> None:
     """Run the writer thread while `source.start()` blocks the caller (D5).
 
-    The writer is released even when `start()` raises (e.g. broker unreachable), so a
-    startup failure exits the process instead of hanging on a non-daemon thread (X-4).
+    The writer is released even when `start()` raises (e.g. broker unreachable), and it
+    is a daemon, so a writer still stuck after `join_timeout_s` cannot keep the process
+    alive (X-4).
     """
-    writer_thread = threading.Thread(target=worker.run, name="ingest-writer")
+    writer_thread = threading.Thread(target=worker.run, name="ingest-writer", daemon=True)
     writer_thread.start()
     try:
         source.start()
