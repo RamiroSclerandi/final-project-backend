@@ -41,7 +41,7 @@ def test_authenticated_users_read_but_cannot_write_device_configs(
     )
 
     assert rows == [{"device_id": device_id}]
-    with pytest.raises(APIError):
+    with pytest.raises(APIError, match="42501"):
         _write_config(authenticated_client, device_id)
 
 
@@ -59,5 +59,5 @@ def test_rollback_restores_user_writes_and_reapplying_removes_them(
     finally:
         apply_sql(_MIGRATION)
 
-    with pytest.raises(APIError):
+    with pytest.raises(APIError, match="42501"):
         _write_config(authenticated_client, device_id)
