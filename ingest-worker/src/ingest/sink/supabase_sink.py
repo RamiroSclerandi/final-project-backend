@@ -42,7 +42,7 @@ from ingest.registry import (
     SensorRecord,
     SensorTypeRecord,
 )
-from ingest.sources.base import DeviceStatus, InboundMessage
+from ingest.sources.base import DeviceStatus, InboundMessage, device_mac_from_topic
 
 if TYPE_CHECKING:
     from supabase import Client
@@ -258,6 +258,10 @@ class MeasurementSink:
             payload = DataloggerV1.model_validate_json(message.payload)
         except ValidationError as exc:
             error = str(exc)
+        topic_mac = device_mac_from_topic(message.topic)
+        if payload is not None and payload.dev != topic_mac:
+            error = f"topic MAC {topic_mac!r} does not match payload dev {payload.dev!r}"
+            payload = None
 
         self._store.archive_raw_message(
             topic=message.topic,

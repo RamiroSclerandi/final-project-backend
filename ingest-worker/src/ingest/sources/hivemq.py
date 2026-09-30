@@ -26,7 +26,7 @@ from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 
 from ingest.config import Settings
-from ingest.sources.base import DeviceStatus, InboundMessage
+from ingest.sources.base import DeviceStatus, InboundMessage, device_mac_from_topic
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +49,6 @@ def _parse_online_offline(payload: bytes) -> bool:
     if text == "offline":
         return False
     raise ValueError(f"unrecognized status payload: {text!r}")
-
-
-def _device_mac_from_topic(topic: str) -> str:
-    """Extract the MAC segment from a `dl/v1/{MAC}/status` topic."""
-    parts = topic.split("/")
-    return parts[2] if len(parts) == 4 else ""
 
 
 class HiveMQSource:
@@ -209,7 +203,7 @@ class HiveMQSource:
             return
 
         status = DeviceStatus(
-            device_mac=_device_mac_from_topic(topic), online=online, received_at=received_at
+            device_mac=device_mac_from_topic(topic), online=online, received_at=received_at
         )
         try:
             self._status_queue.put_nowait(status)

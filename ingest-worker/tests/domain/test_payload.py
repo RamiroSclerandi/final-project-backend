@@ -154,6 +154,14 @@ def test_rejects_min_max_without_n() -> None:
         DataloggerV1.model_validate(envelope)
 
 
+def test_rejects_ts_src_outside_device_or_server() -> None:
+    message = _load_fixture("no_aggregation.json")
+    message["meta"]["ts_src"] = "gps"
+
+    with pytest.raises(ValidationError):
+        DataloggerV1.model_validate(message)
+
+
 # Firmware contract fixtures, vendored verbatim from proyecto-final-esp
 # test/fixtures/datalogger.v1/ (main 4d45e02). They omit `meta.store` by design.
 @pytest.mark.parametrize(

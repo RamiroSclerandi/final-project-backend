@@ -7,6 +7,7 @@ characters, `ch[].val` is required exactly when `ch[].ok` is true, and
 """
 
 import re
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, field_validator, model_validator
 
@@ -32,7 +33,7 @@ class Meta(BaseModel):
     rssi: int
     fw: str
     boot: int
-    ts_src: str
+    ts_src: Literal["device", "server"]
     # The codec omits `store` when the device has no buffer kind; firmware 1.1.0 has no `lost`.
     store: Store | None = None
     lost: NonNegativeInt = 0

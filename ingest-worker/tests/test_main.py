@@ -329,7 +329,9 @@ def test_worker_continues_after_an_unexpected_error_processing_one_message() -> 
     store = _FakeSinkStore(raise_on_archive_for_topic="dl/v1/AABBCCDDEEFF/data")
     worker, source, _, _ = _make_worker(batch_max_size=1, sink_store=store)
     source.inbound_queue.put(_inbound(_data_envelope(seq=1)))
-    source.inbound_queue.put(_inbound(_data_envelope(seq=2), topic="dl/v1/112233445566/data"))
+    source.inbound_queue.put(
+        _inbound(_data_envelope(dev="112233445566", seq=2), topic="dl/v1/112233445566/data")
+    )
     worker.request_shutdown()
 
     worker.run()
