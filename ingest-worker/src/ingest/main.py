@@ -60,7 +60,7 @@ from types import FrameType
 from typing import Protocol
 
 from pydantic import ValidationError
-from supabase import create_client
+from supabase import Client, ClientOptions, create_client
 
 from ingest.config import Settings
 from ingest.domain.payload import DataloggerV1
@@ -82,6 +82,8 @@ logger = logging.getLogger(__name__)
 
 _QUEUE_POLL_TIMEOUT_S = 0.5
 _SHUTDOWN_GRACE_S = 8.0
+# supabase-py defaults to 120 s, long enough to stall the writer past the shutdown grace.
+_POSTGREST_TIMEOUT_S = 10
 
 
 class WorkerSource(SourceCounters, Protocol):
@@ -306,6 +308,11 @@ def run_until_stopped(source: BlockingSource, worker: Drainable, join_timeout_s:
         writer_thread.join(timeout=join_timeout_s)
 
 
+def build_supabase_client(url: str, key: str) -> Client:
+    """Create the Supabase client with PostgREST calls bounded to `_POSTGREST_TIMEOUT_S`."""
+    return create_client(url, key, ClientOptions(postgrest_client_timeout=_POSTGREST_TIMEOUT_S))
+
+
 def _load_settings() -> Settings:
     """Load and validate `Settings`, failing loudly before any connection.
 
@@ -341,7 +348,7 @@ def main() -> None:
     configure_logging(settings.log_level)
     log_event("worker_starting", client_id=settings.mqtt_client_id)
 
-    client = create_client(
+    client = build_supabase_client(
         settings.supabase_url, settings.supabase_service_role_key.get_secret_value()
     )
     store = SupabaseStore(client)
