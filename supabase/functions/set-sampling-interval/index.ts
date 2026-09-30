@@ -1,7 +1,8 @@
 // Sets a device's sampling interval: validates the caller and the request,
-// resolves the device's MAC under the caller's own RLS (no service_role),
-// persists the request, then publishes it through the mqtt module — which
-// is the only place that can reach the broker.
+// resolves the device's MAC under the caller's own RLS (the authorization
+// boundary), persists the request with the service role (device_configs is
+// read-only to users), then publishes it through the mqtt module — which is
+// the only place that can reach the broker.
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { parseMac, parseRequestBody } from "./parsers.ts";
 import { publishSamplingInterval as defaultPublishSamplingInterval } from "./mqtt.ts";
@@ -29,6 +30,7 @@ interface SupabaseLike {
 
 interface Deps {
   createCallerClient: (authHeader: string) => SupabaseLike;
+  createServiceClient: () => SupabaseLike;
   publishSamplingInterval: (
     mac: string,
     samplingIntervalMs: number,
@@ -97,7 +99,9 @@ export function createHandler(deps: Deps) {
       return jsonResponse({ error: "device record is invalid" }, 500);
     }
 
-    const { error: writeError } = await client.from("device_configs").upsert({
+    const { error: writeError } = await deps.createServiceClient().from(
+      "device_configs",
+    ).upsert({
       device_id: parsed.deviceId,
       sampling_interval_ms: parsed.samplingIntervalMs,
       requested_at: new Date().toISOString(),
@@ -132,10 +136,19 @@ function createCallerClient(authHeader: string): SupabaseLike {
   }) as unknown as SupabaseLike;
 }
 
+function createServiceClient(): SupabaseLike {
+  const url = Deno.env.get("SUPABASE_URL")!;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  return createClient(url, serviceRoleKey, {
+    auth: { persistSession: false },
+  }) as unknown as SupabaseLike;
+}
+
 // Guarded so importing this module for tests never binds a real port.
 if (import.meta.main) {
   Deno.serve(createHandler({
     createCallerClient,
+    createServiceClient,
     publishSamplingInterval: defaultPublishSamplingInterval,
   }));
 }
