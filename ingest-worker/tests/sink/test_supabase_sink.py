@@ -444,3 +444,15 @@ def test_a_status_for_an_unregistered_device_registers_it_before_updating() -> N
 
     assert "AABBCCDDEEFF" in registry_store.devices
     assert store.device_status["AABBCCDDEEFF"] is True
+
+
+def test_rejects_data_message_whose_topic_mac_differs_from_payload_dev() -> None:
+    sink, store = _make_sink(batch_max_size=1)
+    spoofed = InboundMessage(
+        topic="dl/v1/112233445566/data", payload=_data_envelope(), received_at=RECEIVED_AT
+    )
+
+    sink.handle_message(spoofed)
+
+    assert store.measurements == {}
+    assert "does not match" in (store.raw_messages[0]["error"] or "")

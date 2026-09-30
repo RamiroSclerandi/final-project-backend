@@ -152,3 +152,11 @@ def test_rejects_min_max_without_n() -> None:
 
     with pytest.raises(ValidationError, match=r"require ch\[\]\.n"):
         DataloggerV1.model_validate(envelope)
+
+
+def test_rejects_ts_src_outside_device_or_server() -> None:
+    message = _load_fixture("no_aggregation.json")
+    message["meta"]["ts_src"] = "gps"
+
+    with pytest.raises(ValidationError):
+        DataloggerV1.model_validate(message)

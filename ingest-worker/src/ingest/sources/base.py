@@ -72,3 +72,9 @@ class MessageSource(Protocol):
     def inbound_queue(self) -> "queue.Queue[InboundMessage]":
         """Bounded queue of raw data envelopes awaiting the writer thread."""
         ...
+
+
+def device_mac_from_topic(topic: str) -> str:
+    """Extract the MAC segment from a `dl/v1/{MAC}/{data|status}` topic, or "" if malformed."""
+    parts = topic.split("/")
+    return parts[2] if len(parts) == 4 else ""
