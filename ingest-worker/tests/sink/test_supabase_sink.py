@@ -141,6 +141,7 @@ class FakeSinkStore:
         # production, which is exactly what happened against the real schema.
         self.known_devices = known_devices if known_devices is not None else {}
         self.raw_messages: list[dict[str, Any]] = []
+        self.processed_raw_message_ids: list[int] = []
         self.measurements: dict[tuple[str, str], dict[str, Any]] = {}
         self.upsert_calls: list[list[dict[str, Any]]] = []
         self.errors_to_raise: list[Exception] = []
@@ -149,10 +150,14 @@ class FakeSinkStore:
 
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
-    ) -> None:
+    ) -> int:
         self.raw_messages.append(
             {"topic": topic, "payload": payload, "received_at": received_at, "error": error}
         )
+        return len(self.raw_messages)
+
+    def mark_raw_messages_processed(self, raw_message_ids: list[int]) -> None:
+        self.processed_raw_message_ids.extend(raw_message_ids)
 
     def upsert_measurements(self, rows: list[dict[str, Any]]) -> int:
         self.upsert_calls.append(rows)
@@ -402,6 +407,19 @@ def test_a_malformed_payload_is_still_archived_with_its_error_and_not_processed(
     assert row["payload"] == "not json"
 
 
+def test_a_json_payload_is_archived_as_an_object_and_not_yet_processed() -> None:
+    row = build_raw_message_row(
+        topic="dl/v1/4022D83D6618/data",
+        payload=b'{"v":1}',
+        received_at=datetime(2026, 9, 10, 12, 0, tzinfo=UTC),
+        error=None,
+        source="hivemq",
+    )
+
+    assert row["payload"] == {"v": 1}
+    assert row["processed"] is False
+
+
 def test_a_row_with_columns_the_record_does_not_declare_is_still_accepted() -> None:
     # PostgREST returns every column of an inserted row, and the schema grows
     # columns the worker never asked for. Splatting the row straight into a
@@ -456,3 +474,71 @@ def test_rejects_data_message_whose_topic_mac_differs_from_payload_dev() -> None
 
     assert store.measurements == {}
     assert "does not match" in (store.raw_messages[0]["error"] or "")
+
+
+def test_a_message_is_marked_processed_only_after_its_batch_persists() -> None:
+    sink, store = _make_sink(batch_max_size=2)
+
+    sink.handle_message(_inbound(_data_envelope(ts=1788804294)))
+    assert store.processed_raw_message_ids == []
+
+    sink.handle_message(_inbound(_data_envelope(ts=1788804295)))
+    assert store.processed_raw_message_ids == [1, 2]
+
+
+def test_a_message_stays_unprocessed_when_its_batch_fails() -> None:
+    sink, store = _make_sink(batch_max_size=1)
+    store.errors_to_raise = [SinkPermanentError("bad request")]
+
+    sink.handle_message(_inbound(_data_envelope()))
+
+    assert store.processed_raw_message_ids == []
+
+
+def test_a_valid_message_without_readings_is_marked_processed_immediately() -> None:
+    sink, store = _make_sink()
+    message = json.loads(_data_envelope())
+    message["ch"] = [{"c": "temperature", "u": "C", "src": "bmp280", "ok": False}]
+
+    sink.handle_message(_inbound(json.dumps(message).encode()))
+
+    assert store.processed_raw_message_ids == [1]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b'{"v":NaN}', b'{"v":Infinity}', b'{"v":"\ud800"}', b'{"v":' + b"9" * 5000 + b"}"],
+    ids=["nan", "infinity", "lone-surrogate", "huge-int"],
+)
+def test_a_payload_json_cannot_carry_is_archived_as_text(payload: bytes) -> None:
+    row = build_raw_message_row(
+        topic="dl/v1/4022D83D6618/data",
+        payload=payload,
+        received_at=datetime(2026, 9, 10, 12, 0, tzinfo=UTC),
+        error="boom",
+        source="hivemq",
+    )
+
+    assert row["payload"] == payload.decode()
+    json.dumps(row, ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def test_a_message_that_fails_mid_normalize_buffers_none_of_its_readings() -> None:
+    sink, store = _make_sink(batch_max_size=10)
+    message = json.loads(_data_envelope())
+    message["ch"].append({"c": "humidity", "u": "%", "src": "dht22", "ok": True, "val": 40.0})
+    sink._registry.resolve = _fail_on_humidity(sink._registry.resolve)  # type: ignore[method-assign]
+
+    with pytest.raises(LookupError):
+        sink.handle_message(_inbound(json.dumps(message).encode()))
+
+    assert sink.pending_count == 0
+
+
+def _fail_on_humidity(resolve: Any) -> Any:
+    def wrapped(reading: Any) -> Any:
+        if reading.channel == "humidity":
+            raise LookupError("simulated registry failure")
+        return resolve(reading)
+
+    return wrapped

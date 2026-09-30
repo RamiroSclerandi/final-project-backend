@@ -23,6 +23,7 @@ duplicate-rate metric), and why retry (D9) is per batch with no atomicity
 branch: whole-batch replay is idempotent under either outcome.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -111,24 +112,38 @@ def build_raw_message_row(
 
     Args:
         topic: The MQTT topic the message arrived on.
-        payload: The raw bytes, decoded permissively so an undecodable
-            message is still archived rather than lost.
+        payload: The raw bytes, stored as a JSON value when they parse and as a
+            permissively decoded string otherwise, so nothing is lost.
         received_at: Server arrival time.
         error: The validation error, when the payload did not parse.
         source: The transport that delivered it, one of the values
             `raw_messages_source_valid` admits.
 
     Returns:
-        The row to insert.
+        The row to insert, unprocessed until its readings persist.
     """
     return {
         "topic": topic,
-        "payload": payload.decode("utf-8", errors="replace"),
+        "payload": _as_json_value(payload.decode("utf-8", errors="replace")),
         "received_at": received_at.isoformat(),
         "error": error,
-        "processed": error is None,
+        "processed": False,
         "source": source,
     }
+
+
+def _reject_constant(name: str) -> Any:
+    raise ValueError(f"non-finite JSON number {name}")
+
+
+def _as_json_value(text: str) -> Any:
+    """Parse `text` for a JSONB column, keeping it as a string when strict JSON cannot carry it."""
+    try:
+        value = json.loads(text, parse_constant=_reject_constant)
+        json.dumps(value, ensure_ascii=False).encode("utf-8")
+    except (ValueError, RecursionError):
+        return text
+    return value
 
 
 class SinkStore(Protocol):
@@ -136,8 +151,17 @@ class SinkStore(Protocol):
 
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
-    ) -> None:
-        """Archive one dequeued message to `raw_messages`, regardless of outcome."""
+    ) -> int:
+        """Archive one dequeued message to `raw_messages` and return its id."""
+        ...
+
+    def mark_raw_messages_processed(self, raw_message_ids: list[int]) -> None:
+        """Flag archived messages whose readings are persisted.
+
+        Raises:
+            SinkTransientError: Timeout or a 5xx response.
+            SinkPermanentError: A 4xx response.
+        """
         ...
 
     def upsert_measurements(self, rows: list[dict[str, Any]]) -> int:
@@ -232,6 +256,7 @@ class MeasurementSink:
         self._clock = clock
         self._sleep = sleep
         self._pending: list[dict[str, Any]] = []
+        self._pending_raw_message_ids: list[int] = []
         self._pending_since: float | None = None
         self._device_last_touch: dict[str, float] = {}
         self.batches_written_count = 0
@@ -263,7 +288,7 @@ class MeasurementSink:
             error = f"topic MAC {topic_mac!r} does not match payload dev {payload.dev!r}"
             payload = None
 
-        self._store.archive_raw_message(
+        raw_message_id = self._store.archive_raw_message(
             topic=message.topic,
             payload=message.payload,
             received_at=message.received_at,
@@ -273,8 +298,14 @@ class MeasurementSink:
             logger.warning("archived unparseable message: topic=%s", message.topic)
             return
 
-        for reading in normalize(payload, received_at=message.received_at):
-            self._buffer_reading(reading)
+        rows = [self._to_row(reading) for reading in normalize(payload, message.received_at)]
+        if rows:
+            if not self._pending:
+                self._pending_since = self._clock()
+            self._pending.extend(rows)
+            self._pending_raw_message_ids.append(raw_message_id)
+        else:
+            self._mark_processed([raw_message_id])
 
         self._touch_device(payload.dev, payload.meta.fw, message.received_at)
         self.flush_if_due()
@@ -304,6 +335,7 @@ class MeasurementSink:
         if not self._pending:
             return
         rows, self._pending = self._pending, []
+        raw_message_ids, self._pending_raw_message_ids = self._pending_raw_message_ids, []
         self._pending_since = None
         try:
             written = self._write_batch_with_retry(rows)
@@ -313,14 +345,20 @@ class MeasurementSink:
             return
         self.batches_written_count += 1
         self.duplicates_skipped_count += len(rows) - written
+        self._mark_processed(raw_message_ids)
 
-    def _buffer_reading(self, reading: Reading) -> None:
+    def _mark_processed(self, raw_message_ids: list[int]) -> None:
+        try:
+            self._store.mark_raw_messages_processed(raw_message_ids)
+        except (SinkTransientError, SinkPermanentError) as exc:
+            logger.warning(
+                "could not mark %d raw message(s) processed: %s", len(raw_message_ids), exc
+            )
+
+    def _to_row(self, reading: Reading) -> dict[str, Any]:
         expected_min, expected_max = self._registry.expected_range(reading.channel, reading.unit)
         quality = _band_quality(reading.value, expected_min, expected_max)
-        sensor_id = self._registry.resolve(reading)
-        if not self._pending:
-            self._pending_since = self._clock()
-        self._pending.append(_to_measurement_row(reading, sensor_id, quality))
+        return _to_measurement_row(reading, self._registry.resolve(reading), quality)
 
     def _touch_device(self, device_mac: str, firmware_version: str, at: datetime) -> None:
         last_touch = self._device_last_touch.get(device_mac)
@@ -433,16 +471,32 @@ class SupabaseStore:
 
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
-    ) -> None:
-        self._client.table("raw_messages").insert(
-            build_raw_message_row(
-                topic=topic,
-                payload=payload,
-                received_at=received_at,
-                error=error,
-                source=self._source,
+    ) -> int:
+        rows = (
+            self._client.table("raw_messages")
+            .insert(
+                build_raw_message_row(
+                    topic=topic,
+                    payload=payload,
+                    received_at=received_at,
+                    error=error,
+                    source=self._source,
+                )
             )
-        ).execute()
+            .execute()
+            .data
+        )
+        return int(_row(rows[0])["id"])
+
+    def mark_raw_messages_processed(self, raw_message_ids: list[int]) -> None:
+        try:
+            self._client.table("raw_messages").update({"processed": True}).in_(
+                "id", raw_message_ids
+            ).execute()
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise SinkTransientError(str(exc)) from exc
+        except APIError as exc:
+            raise _classify_api_error(exc) from exc
 
     def upsert_measurements(self, rows: list[dict[str, Any]]) -> int:
         try:

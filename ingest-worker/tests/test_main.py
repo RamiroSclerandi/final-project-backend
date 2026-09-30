@@ -153,12 +153,16 @@ class _FakeSinkStore:
 
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
-    ) -> None:
+    ) -> int:
         if topic == self._raise_on_archive_for_topic:
             raise RuntimeError("simulated archive failure")
         self.raw_messages.append(
             {"topic": topic, "payload": payload, "received_at": received_at, "error": error}
         )
+        return len(self.raw_messages)
+
+    def mark_raw_messages_processed(self, raw_message_ids: list[int]) -> None:
+        pass
 
     def upsert_measurements(self, rows: list[dict[str, Any]]) -> int:
         written = 0
