@@ -62,6 +62,8 @@ let publishedMs: number | undefined;
 const handle = createHandler({
   // deno-lint-ignore no-explicit-any
   createCallerClient: createCallerClient as any,
+  // deno-lint-ignore no-explicit-any
+  createServiceClient: () => admin as any,
   publishSamplingInterval: (m: string, ms: number) => {
     publishedMac = m;
     publishedMs = ms;

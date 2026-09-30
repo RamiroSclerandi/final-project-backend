@@ -73,6 +73,7 @@ Deno.test("rejects a request without an Authorization header", async () => {
   let published = false;
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () => {
       published = true;
       return Promise.resolve();
@@ -91,6 +92,7 @@ Deno.test("rejects an invalid JSON body", async () => {
   const { client } = buildFakeClient({ device: { mac_address: VALID_MAC } });
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () => Promise.resolve(),
   });
 
@@ -111,6 +113,7 @@ Deno.test("rejects an out-of-range samplingIntervalMs", async () => {
   const { client } = buildFakeClient({ device: { mac_address: VALID_MAC } });
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () => Promise.resolve(),
   });
 
@@ -128,6 +131,7 @@ Deno.test("returns 404 for an unknown device", async () => {
   let published = false;
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () => {
       published = true;
       return Promise.resolve();
@@ -148,6 +152,7 @@ Deno.test("returns 500 for a malformed MAC on the device row", async () => {
   const { client } = buildFakeClient({ device: { mac_address: "not-a-mac" } });
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () => Promise.resolve(),
   });
 
@@ -168,6 +173,7 @@ Deno.test("returns 500 when the device_configs write fails", async () => {
   let published = false;
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () => {
       published = true;
       return Promise.resolve();
@@ -190,6 +196,7 @@ Deno.test("returns 502 when the publish fails but keeps the written config row",
   });
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () =>
       Promise.reject(new Error("broker unavailable")),
   });
@@ -213,6 +220,7 @@ Deno.test("returns 200 with the confirmed configuration on success", async () =>
   let publishedMs: number | undefined;
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: (mac: string, ms: number) => {
       publishedMac = mac;
       publishedMs = ms;
@@ -244,6 +252,10 @@ Deno.test("answers a CORS preflight without touching the database", async () => 
       clientBuilt = true;
       throw new Error("must not be called");
     },
+    createServiceClient: () => {
+      clientBuilt = true;
+      throw new Error("must not be called");
+    },
     publishSamplingInterval: () => Promise.resolve(),
   });
 
@@ -266,6 +278,7 @@ Deno.test("every JSON response carries the CORS origin header", async () => {
   const { client } = buildFakeClient({ device: { mac_address: VALID_MAC } });
   const handle = createHandler({
     createCallerClient: () => client,
+    createServiceClient: () => client,
     publishSamplingInterval: () => Promise.resolve(),
   });
 
@@ -274,4 +287,46 @@ Deno.test("every JSON response carries the CORS origin header", async () => {
   );
 
   assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*");
+});
+
+Deno.test("writes device_configs with the service client, never the caller's", async () => {
+  const caller = buildFakeClient({ device: { mac_address: VALID_MAC } });
+  const service = buildFakeClient({});
+  const handle = createHandler({
+    createCallerClient: () => caller.client,
+    createServiceClient: () => service.client,
+    publishSamplingInterval: () => Promise.resolve(),
+  });
+
+  const res = await handle(
+    buildRequest({ deviceId: DEVICE_ID, samplingIntervalMs: 5000 }, {
+      Authorization: "Bearer token",
+    }),
+  );
+
+  assertEquals(res.status, 200);
+  assertEquals(caller.upsertCalls.length, 0);
+  assertEquals(service.upsertCalls.length, 1);
+});
+
+Deno.test("never builds the service client when the caller cannot see the device", async () => {
+  const { client } = buildFakeClient({ device: null });
+  let serviceBuilt = false;
+  const handle = createHandler({
+    createCallerClient: () => client,
+    createServiceClient: () => {
+      serviceBuilt = true;
+      return client;
+    },
+    publishSamplingInterval: () => Promise.resolve(),
+  });
+
+  const res = await handle(
+    buildRequest({ deviceId: DEVICE_ID, samplingIntervalMs: 5000 }, {
+      Authorization: "Bearer token",
+    }),
+  );
+
+  assertEquals(res.status, 404);
+  assertEquals(serviceBuilt, false);
 });
