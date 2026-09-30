@@ -122,19 +122,28 @@ def build_raw_message_row(
     Returns:
         The row to insert, unprocessed until its readings persist.
     """
-    text = payload.decode("utf-8", errors="replace")
-    try:
-        stored: Any = json.loads(text)
-    except json.JSONDecodeError:
-        stored = text
     return {
         "topic": topic,
-        "payload": stored,
+        "payload": _as_json_value(payload.decode("utf-8", errors="replace")),
         "received_at": received_at.isoformat(),
         "error": error,
         "processed": False,
         "source": source,
     }
+
+
+def _reject_constant(name: str) -> Any:
+    raise ValueError(f"non-finite JSON number {name}")
+
+
+def _as_json_value(text: str) -> Any:
+    """Parse `text` for a JSONB column, keeping it as a string when strict JSON cannot carry it."""
+    try:
+        value = json.loads(text, parse_constant=_reject_constant)
+        json.dumps(value, ensure_ascii=False).encode("utf-8")
+    except (ValueError, RecursionError):
+        return text
+    return value
 
 
 class SinkStore(Protocol):
@@ -289,10 +298,11 @@ class MeasurementSink:
             logger.warning("archived unparseable message: topic=%s", message.topic)
             return
 
-        buffered_before = len(self._pending)
-        for reading in normalize(payload, received_at=message.received_at):
-            self._buffer_reading(reading)
-        if len(self._pending) > buffered_before:
+        rows = [self._to_row(reading) for reading in normalize(payload, message.received_at)]
+        if rows:
+            if not self._pending:
+                self._pending_since = self._clock()
+            self._pending.extend(rows)
             self._pending_raw_message_ids.append(raw_message_id)
         else:
             self._mark_processed([raw_message_id])
@@ -345,13 +355,10 @@ class MeasurementSink:
                 "could not mark %d raw message(s) processed: %s", len(raw_message_ids), exc
             )
 
-    def _buffer_reading(self, reading: Reading) -> None:
+    def _to_row(self, reading: Reading) -> dict[str, Any]:
         expected_min, expected_max = self._registry.expected_range(reading.channel, reading.unit)
         quality = _band_quality(reading.value, expected_min, expected_max)
-        sensor_id = self._registry.resolve(reading)
-        if not self._pending:
-            self._pending_since = self._clock()
-        self._pending.append(_to_measurement_row(reading, sensor_id, quality))
+        return _to_measurement_row(reading, self._registry.resolve(reading), quality)
 
     def _touch_device(self, device_mac: str, firmware_version: str, at: datetime) -> None:
         last_touch = self._device_last_touch.get(device_mac)

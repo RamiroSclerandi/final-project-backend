@@ -503,3 +503,42 @@ def test_a_valid_message_without_readings_is_marked_processed_immediately() -> N
     sink.handle_message(_inbound(json.dumps(message).encode()))
 
     assert store.processed_raw_message_ids == [1]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b'{"v":NaN}', b'{"v":Infinity}', b'{"v":"\ud800"}', b'{"v":' + b"9" * 5000 + b"}"],
+    ids=["nan", "infinity", "lone-surrogate", "huge-int"],
+)
+def test_a_payload_json_cannot_carry_is_archived_as_text(payload: bytes) -> None:
+    row = build_raw_message_row(
+        topic="dl/v1/4022D83D6618/data",
+        payload=payload,
+        received_at=datetime(2026, 9, 10, 12, 0, tzinfo=UTC),
+        error="boom",
+        source="hivemq",
+    )
+
+    assert row["payload"] == payload.decode()
+    json.dumps(row, ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def test_a_message_that_fails_mid_normalize_buffers_none_of_its_readings() -> None:
+    sink, store = _make_sink(batch_max_size=10)
+    message = json.loads(_data_envelope())
+    message["ch"].append({"c": "humidity", "u": "%", "src": "dht22", "ok": True, "val": 40.0})
+    sink._registry.resolve = _fail_on_humidity(sink._registry.resolve)  # type: ignore[method-assign]
+
+    with pytest.raises(LookupError):
+        sink.handle_message(_inbound(json.dumps(message).encode()))
+
+    assert sink.pending_count == 0
+
+
+def _fail_on_humidity(resolve: Any) -> Any:
+    def wrapped(reading: Any) -> Any:
+        if reading.channel == "humidity":
+            raise LookupError("simulated registry failure")
+        return resolve(reading)
+
+    return wrapped
