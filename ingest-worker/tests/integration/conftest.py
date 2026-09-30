@@ -251,3 +251,16 @@ def store(service_role_client: Client) -> SupabaseStore:
 def unique_mac() -> str:
     """A fresh 12-hex-char uppercase MAC, satisfying `devices_mac_format` and unique per test."""
     return secrets.token_hex(6).upper()
+
+
+@pytest.fixture
+def apply_sql(
+    _postgrest_endpoint: tuple[str, str, PostgresContainer],
+) -> Callable[[Path], None]:
+    """Return a function applying one SQL file to the live database, e.g. a rollback script."""
+    _base_url, _jwt_secret, postgres = _postgrest_endpoint
+
+    def apply(path: Path) -> None:
+        _run_sql_file(postgres, path.read_bytes(), f"/tmp/{path.name}")
+
+    return apply
