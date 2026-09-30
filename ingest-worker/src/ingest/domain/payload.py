@@ -9,7 +9,7 @@ characters, `ch[].val` is required exactly when `ch[].ok` is true, and
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, field_validator, model_validator
 
 _MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
 
@@ -34,7 +34,9 @@ class Meta(BaseModel):
     fw: str
     boot: int
     ts_src: Literal["device", "server"]
-    store: Store
+    # The codec omits `store` when the device has no buffer kind; firmware 1.1.0 has no `lost`.
+    store: Store | None = None
+    lost: NonNegativeInt = 0
     rst: str | None = None
 
 
