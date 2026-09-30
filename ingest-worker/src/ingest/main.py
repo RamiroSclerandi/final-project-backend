@@ -281,6 +281,31 @@ class Worker:
         )
 
 
+class BlockingSource(Protocol):
+    def start(self) -> None: ...
+
+
+class Drainable(Protocol):
+    def run(self) -> None: ...
+    def request_shutdown(self) -> None: ...
+
+
+def run_until_stopped(source: BlockingSource, worker: Drainable, join_timeout_s: float) -> None:
+    """Run the writer thread while `source.start()` blocks the caller (D5).
+
+    The writer is released even when `start()` raises (e.g. broker unreachable), and it
+    is a daemon, so a writer still stuck after `join_timeout_s` cannot keep the process
+    alive (X-4).
+    """
+    writer_thread = threading.Thread(target=worker.run, name="ingest-writer", daemon=True)
+    writer_thread.start()
+    try:
+        source.start()
+    finally:
+        worker.request_shutdown()
+        writer_thread.join(timeout=join_timeout_s)
+
+
 def _load_settings() -> Settings:
     """Load and validate `Settings`, failing loudly before any connection.
 
@@ -338,12 +363,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
 
-    writer_thread = threading.Thread(target=worker.run, name="ingest-writer")
-    writer_thread.start()
-
-    source.start()  # blocks on the main thread until stop() is called (D5)
-
-    writer_thread.join(timeout=_SHUTDOWN_GRACE_S + 1)
+    run_until_stopped(source, worker, join_timeout_s=_SHUTDOWN_GRACE_S + 1)
     log_event("worker_stopped")
 
 
