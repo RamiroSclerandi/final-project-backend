@@ -23,6 +23,7 @@ duplicate-rate metric), and why retry (D9) is per batch with no atomicity
 branch: whole-batch replay is idempotent under either outcome.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -111,22 +112,27 @@ def build_raw_message_row(
 
     Args:
         topic: The MQTT topic the message arrived on.
-        payload: The raw bytes, decoded permissively so an undecodable
-            message is still archived rather than lost.
+        payload: The raw bytes, stored as a JSON value when they parse and as a
+            permissively decoded string otherwise, so nothing is lost.
         received_at: Server arrival time.
         error: The validation error, when the payload did not parse.
         source: The transport that delivered it, one of the values
             `raw_messages_source_valid` admits.
 
     Returns:
-        The row to insert.
+        The row to insert, unprocessed until its readings persist.
     """
+    text = payload.decode("utf-8", errors="replace")
+    try:
+        stored: Any = json.loads(text)
+    except json.JSONDecodeError:
+        stored = text
     return {
         "topic": topic,
-        "payload": payload.decode("utf-8", errors="replace"),
+        "payload": stored,
         "received_at": received_at.isoformat(),
         "error": error,
-        "processed": error is None,
+        "processed": False,
         "source": source,
     }
 
@@ -136,8 +142,17 @@ class SinkStore(Protocol):
 
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
-    ) -> None:
-        """Archive one dequeued message to `raw_messages`, regardless of outcome."""
+    ) -> int:
+        """Archive one dequeued message to `raw_messages` and return its id."""
+        ...
+
+    def mark_raw_messages_processed(self, raw_message_ids: list[int]) -> None:
+        """Flag archived messages whose readings are persisted.
+
+        Raises:
+            SinkTransientError: Timeout or a 5xx response.
+            SinkPermanentError: A 4xx response.
+        """
         ...
 
     def upsert_measurements(self, rows: list[dict[str, Any]]) -> int:
@@ -232,6 +247,7 @@ class MeasurementSink:
         self._clock = clock
         self._sleep = sleep
         self._pending: list[dict[str, Any]] = []
+        self._pending_raw_message_ids: list[int] = []
         self._pending_since: float | None = None
         self._device_last_touch: dict[str, float] = {}
         self.batches_written_count = 0
@@ -263,7 +279,7 @@ class MeasurementSink:
             error = f"topic MAC {topic_mac!r} does not match payload dev {payload.dev!r}"
             payload = None
 
-        self._store.archive_raw_message(
+        raw_message_id = self._store.archive_raw_message(
             topic=message.topic,
             payload=message.payload,
             received_at=message.received_at,
@@ -273,8 +289,13 @@ class MeasurementSink:
             logger.warning("archived unparseable message: topic=%s", message.topic)
             return
 
+        buffered_before = len(self._pending)
         for reading in normalize(payload, received_at=message.received_at):
             self._buffer_reading(reading)
+        if len(self._pending) > buffered_before:
+            self._pending_raw_message_ids.append(raw_message_id)
+        else:
+            self._mark_processed([raw_message_id])
 
         self._touch_device(payload.dev, payload.meta.fw, message.received_at)
         self.flush_if_due()
@@ -304,6 +325,7 @@ class MeasurementSink:
         if not self._pending:
             return
         rows, self._pending = self._pending, []
+        raw_message_ids, self._pending_raw_message_ids = self._pending_raw_message_ids, []
         self._pending_since = None
         try:
             written = self._write_batch_with_retry(rows)
@@ -313,6 +335,15 @@ class MeasurementSink:
             return
         self.batches_written_count += 1
         self.duplicates_skipped_count += len(rows) - written
+        self._mark_processed(raw_message_ids)
+
+    def _mark_processed(self, raw_message_ids: list[int]) -> None:
+        try:
+            self._store.mark_raw_messages_processed(raw_message_ids)
+        except (SinkTransientError, SinkPermanentError) as exc:
+            logger.warning(
+                "could not mark %d raw message(s) processed: %s", len(raw_message_ids), exc
+            )
 
     def _buffer_reading(self, reading: Reading) -> None:
         expected_min, expected_max = self._registry.expected_range(reading.channel, reading.unit)
@@ -433,16 +464,32 @@ class SupabaseStore:
 
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
-    ) -> None:
-        self._client.table("raw_messages").insert(
-            build_raw_message_row(
-                topic=topic,
-                payload=payload,
-                received_at=received_at,
-                error=error,
-                source=self._source,
+    ) -> int:
+        rows = (
+            self._client.table("raw_messages")
+            .insert(
+                build_raw_message_row(
+                    topic=topic,
+                    payload=payload,
+                    received_at=received_at,
+                    error=error,
+                    source=self._source,
+                )
             )
-        ).execute()
+            .execute()
+            .data
+        )
+        return int(_row(rows[0])["id"])
+
+    def mark_raw_messages_processed(self, raw_message_ids: list[int]) -> None:
+        try:
+            self._client.table("raw_messages").update({"processed": True}).in_(
+                "id", raw_message_ids
+            ).execute()
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise SinkTransientError(str(exc)) from exc
+        except APIError as exc:
+            raise _classify_api_error(exc) from exc
 
     def upsert_measurements(self, rows: list[dict[str, Any]]) -> int:
         try:

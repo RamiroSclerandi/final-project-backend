@@ -72,25 +72,31 @@ def registered_sensor_id(store: SupabaseStore, unique_mac: str) -> str:
     return registry.resolve(_reading(unique_mac))
 
 
-def test_archiving_a_message_writes_a_raw_messages_row(
+def test_archived_message_is_a_json_object_and_processed_only_once_marked(
     store: SupabaseStore, service_role_client: Client, unique_mac: str
 ) -> None:
     topic = f"dl/v1/{unique_mac}/data"
     received_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
 
-    store.archive_raw_message(topic=topic, payload=b'{"v": 1}', received_at=received_at, error=None)
-
-    rows = (
+    raw_message_id = store.archive_raw_message(
+        topic=topic, payload=b'{"v": 1}', received_at=received_at, error=None
+    )
+    archived = (
         service_role_client.table("raw_messages")
-        .select("topic,source,processed,error")
+        .select("id,source,processed,error,payload->>v")
         .eq("topic", topic)
         .execute()
         .data
     )
-    assert len(rows) == 1
-    assert rows[0]["source"] == "hivemq"
-    assert rows[0]["processed"] is True
-    assert rows[0]["error"] is None
+    store.mark_raw_messages_processed([raw_message_id])
+    marked = (
+        service_role_client.table("raw_messages").select("processed").eq("topic", topic).execute()
+    ).data
+
+    assert archived == [
+        {"id": raw_message_id, "source": "hivemq", "processed": False, "error": None, "v": "1"}
+    ]
+    assert marked == [{"processed": True}]
 
 
 def test_archiving_an_unparseable_message_writes_its_error_and_leaves_it_unprocessed(
