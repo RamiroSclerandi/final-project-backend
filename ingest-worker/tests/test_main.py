@@ -26,7 +26,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from ingest.main import Worker
+import pytest
+
+from ingest.main import Worker, run_until_stopped
 from ingest.observability import Metrics, SeqGapTracker
 from ingest.registry import DeviceRecord, Registry, SensorRecord, SensorTypeRecord
 from ingest.sink.supabase_sink import MeasurementSink
@@ -357,3 +359,17 @@ def test_worker_stops_running_when_shutdown_is_requested_from_another_thread() -
     thread.join(timeout=5.0)
 
     assert thread.is_alive() is False
+
+
+class _RefusingBroker:
+    def start(self) -> None:
+        raise ConnectionRefusedError("broker unreachable")
+
+
+def test_run_until_stopped_releases_the_writer_when_the_source_fails_to_start() -> None:
+    worker, _, _, _ = _make_worker(shutdown_grace_s=0.1)
+
+    with pytest.raises(ConnectionRefusedError):
+        run_until_stopped(_RefusingBroker(), worker, join_timeout_s=2.0)
+
+    assert not any(t.name == "ingest-writer" for t in threading.enumerate())
