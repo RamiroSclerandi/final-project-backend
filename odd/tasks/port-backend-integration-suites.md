@@ -95,8 +95,10 @@ containers on a 7.3 GB host, heavy and brittle in CI).
 - 2026-10-01: plan created, option A chosen. No code written yet.
 - 2026-10-01: T1 done, commit ed1e635 (RED: wrong code XX000 vs actual 42501; GREEN 4 passed).
 - 2026-10-01: T2 done (RED: inverted assertions failed 6, wrong code XX000 failed 1; GREEN 7 passed).
+- 2026-10-01: T2 commit 44c52b0; T3 commit 7a8a59f (RED: inverted assertions failed 2, GREEN passed).
+- 2026-10-01: T4+T5 commit 7d82b49 (RED: wrong table name failed; signup asserted True failed; GREEN passed). Added query_scalar fixture in conftest.
+- 2026-10-01: local run on Windows+Podman shows a pre-existing flaky docker-API ConnectionError (stale connection) at session teardown and at idle execs; CI (Linux) unaffected.
 
 ## Next step
 
-Confirm commit authority, branch `test/port-backend-integration-suites` from
-`main`, start T1.
+T1-T5 done on feature/port-rls-integration-suites; next: T6 (pg_cron spike).
