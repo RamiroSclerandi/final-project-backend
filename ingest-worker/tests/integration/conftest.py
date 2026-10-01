@@ -242,6 +242,35 @@ def view_reloptions(
 
 
 @pytest.fixture
+def query_scalar(
+    _postgrest_endpoint: tuple[str, str, PostgresContainer],
+) -> Callable[[str], str]:
+    """Return a function running one read-only SQL query via `psql` and returning its output.
+
+    For catalog state PostgREST does not serve (e.g. `pg_publication_tables`).
+    The query must not contain double quotes or `$`, since it is passed
+    through `sh -c`.
+    """
+    _base_url, _jwt_secret, postgres = _postgrest_endpoint
+
+    def _query(sql: str) -> str:
+        escaped_password = postgres.password.replace("'", "'\"'\"'")
+        result = postgres.exec(
+            [
+                "sh",
+                "-c",
+                f"PGPASSWORD='{escaped_password}' psql --username {postgres.username} "
+                f'--dbname {postgres.dbname} --host 127.0.0.1 -tAc "{sql}"',
+            ]
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(f"query failed: {sql}\n{result.output.decode()}")
+        return result.output.decode().strip()
+
+    return _query
+
+
+@pytest.fixture
 def store(service_role_client: Client) -> SupabaseStore:
     """The `SupabaseStore` under test, wrapping the real PostgREST-backed client."""
     return SupabaseStore(service_role_client, source="hivemq")
