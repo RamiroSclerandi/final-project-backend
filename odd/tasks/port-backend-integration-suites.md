@@ -72,16 +72,22 @@ containers on a 7.3 GB host, heavy and brittle in CI).
   includes `public.measurements` and `public.devices`. Route: inline.
 - [x] T5 Signup disabled: parse `supabase/config.toml` with `tomllib` and
   assert `[auth] enable_signup = false`. Route: inline (unit test, no Docker).
-- [ ] T6 `aggregation-schedule`: dedicated `supabase/postgres` container,
+- [x] T6 `aggregation-schedule`: dedicated `supabase/postgres` container,
   apply migrations, assert `pg_cron` in `pg_extension` and `cron.job` rows
   `refresh-hourly` = `5 * * * *` and `refresh-daily` = `10 0 * * *`, both
-  active. Risk: the image needs `shared_preload_libraries=pg_cron` and the
-  Supabase role bootstrap; verify with a spike first. Route: delegated (fixture
-  plus test plus possible CI change).
-- [ ] T7 Manual local scripts: broker round trip (Edge Function to ephemeral
+  active. Spike result: the image (matching `major_version = 17`) already
+  preloads pg_cron and ships the Supabase roles and `auth.users`, so the real
+  migrations apply unchanged as the `postgres` role; no bootstrap, no
+  `ci.yml` change. Route: delegated (fixture plus test).
+- [x] T7 Manual local scripts: broker round trip (Edge Function to ephemeral
   `eclipse-mosquitto`, assert payload `{samplingInterval}` and the
   `device_configs` row) and Realtime latency (< 2 s) against `supabase start`.
-  Document how to run them. Route: delegated.
+  Documented in `supabase/README.md`. Route: delegated.
+- [x] T8 Follow-ups from review of PR #30 (`fix/integration-test-denial-assertions`,
+  merged): anon denial asserts the exact empty result and propagates any other
+  error; seed cleanup runs inside try/finally; `query_scalar` runs without a
+  shell; `view_reloptions` allowlists the relation name. Commits 7509c53,
+  8aab5f7, c3efcc6. Route: inline.
 
 ## Acceptance criteria
 
@@ -97,8 +103,22 @@ containers on a 7.3 GB host, heavy and brittle in CI).
 - 2026-10-01: T2 done (RED: inverted assertions failed 6, wrong code XX000 failed 1; GREEN 7 passed).
 - 2026-10-01: T2 commit 44c52b0; T3 commit 7a8a59f (RED: inverted assertions failed 2, GREEN passed).
 - 2026-10-01: T4+T5 commit 7d82b49 (RED: wrong table name failed; signup asserted True failed; GREEN passed). Added query_scalar fixture in conftest.
-- 2026-10-01: local run on Windows+Podman shows a pre-existing flaky docker-API ConnectionError (stale connection) at session teardown and at idle execs; CI (Linux) unaffected.
+- 2026-10-01: the earlier Windows+Podman flaky docker-API ConnectionError had a
+  root cause: the Podman service idle timeout (`service_timeout` 5 s). Fixed in
+  the machine config (`service_timeout=0`); the local integration suite is green.
+- 2026-10-01: T8 recorded: PR #30 merged (commits 7509c53, 8aab5f7, c3efcc6).
+- 2026-10-01: T6 done, commit ac1305d (RED: wrong hourly schedule `6 * * * *`
+  failed against actual `5 * * * *`; GREEN 2 passed). Image
+  `public.ecr.aws/supabase/postgres:17.6.1.167`: about 370 MB compressed,
+  1.28 GB on disk; test module takes about 10 s with the image cached.
+- 2026-10-01: T7 done, commit 3cbfb20. Observed locally against `supabase start`
+  and an ephemeral mosquitto: Realtime INSERT delivered in 479 ms, UPDATE in
+  513 ms; broker round trip returned 200, payload `{"samplingInterval":15000}`
+  on `dl/v1/<MAC>/config` and the `device_configs` row persisted.
 
 ## Next step
 
-T1-T5 done on feature/port-rls-integration-suites; next: T6 (pg_cron spike).
+T1-T8 done. T1-T5 and T8 shipped in PR #29/#30; T6-T7 are on
+feature/port-pg-cron-and-manual-suites, ready for the user to push and open the
+PR. Then mark every row of `Tests_Integracion_Backend_Pendientes.md` covered or
+explicitly manual.
