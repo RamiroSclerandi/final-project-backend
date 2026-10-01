@@ -32,6 +32,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 from collections.abc import Callable, Iterator
@@ -55,6 +56,7 @@ _SEED_PATH = _REPO_ROOT / "supabase" / "seed.sql"
 _POSTGRES_ALIAS = "postgres"
 _POSTGREST_IMAGE = "postgrest/postgrest:v12.2.8"
 _POSTGREST_PORT = 3000
+_IDENTIFIER_PATTERN = re.compile(r"[a-z_][a-z0-9_]*")
 
 
 def _run_sql_file(postgres: PostgresContainer, content: bytes, container_path: str) -> None:
@@ -209,9 +211,7 @@ def authenticated_client(_postgrest_endpoint: tuple[str, str, PostgresContainer]
 
 
 @pytest.fixture
-def view_reloptions(
-    _postgrest_endpoint: tuple[str, str, PostgresContainer],
-) -> Callable[[str], str]:
+def view_reloptions(query_scalar: Callable[[str], str]) -> Callable[[str], str]:
     """Return a function reading a relation's `reloptions` via `psql`.
 
     PostgREST only serves the `public` schema's data API, never
@@ -219,24 +219,15 @@ def view_reloptions(
     through any `Client` fixture above -- this reads it directly from the
     same Postgres container, the same way `_run_sql_file` applies DDL.
     """
-    _base_url, _jwt_secret, postgres = _postgrest_endpoint
 
     def _read(relname: str) -> str:
-        escaped_password = postgres.password.replace("'", "'\"'\"'")
-        query = f"SELECT coalesce(reloptions::text, '') FROM pg_class WHERE relname = '{relname}'"
-        result = postgres.exec(
-            [
-                "sh",
-                "-c",
-                f"PGPASSWORD='{escaped_password}' psql --username {postgres.username} "
-                f'--dbname {postgres.dbname} --host 127.0.0.1 -tAc "{query}"',
-            ]
+        # psql -c has no parameter binding, so the name is allowlisted before
+        # it is interpolated into the literal.
+        if not _IDENTIFIER_PATTERN.fullmatch(relname):
+            raise ValueError(f"relname must be a lowercase SQL identifier, got {relname!r}")
+        return query_scalar(
+            f"SELECT coalesce(reloptions::text, '') FROM pg_class WHERE relname = '{relname}'"
         )
-        if result.exit_code != 0:
-            raise RuntimeError(
-                f"reading reloptions for {relname} failed:\n{result.output.decode()}"
-            )
-        return result.output.decode().strip()
 
     return _read
 

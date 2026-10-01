@@ -53,3 +53,10 @@ def test_v_latest_readings_reports_security_invoker_enabled(
     assert re.search(r"security_invoker=(on|true)", reloptions), (
         f"expected security_invoker=on|true in reloptions, got: {reloptions!r}"
     )
+
+
+def test_view_reloptions_rejects_a_name_that_is_not_an_identifier(
+    view_reloptions: Callable[[str], str],
+) -> None:
+    with pytest.raises(ValueError, match="identifier"):
+        view_reloptions("v_latest_readings' OR '1'='1")
