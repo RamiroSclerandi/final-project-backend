@@ -66,7 +66,7 @@ containers on a 7.3 GB host, heavy and brittle in CI).
 - [x] T2 `auth-rls` + `measurements-rls`: authenticated reads `devices`,
   `measurements`, `sensors`; anon gets an error or `[]`; authenticated INSERT
   into `measurements` is rejected. Route: inline.
-- [ ] T3 `node-health`: `raw_messages` returns `[]` for authenticated and anon;
+- [x] T3 `node-health`: `raw_messages` returns `[]` for authenticated and anon;
   a sensor's first measurement appears in `v_latest_readings`. Route: inline.
 - [ ] T4 Realtime publication: `pg_publication_tables` for `supabase_realtime`
   includes `public.measurements` and `public.devices`. Route: inline.
