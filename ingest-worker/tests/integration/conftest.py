@@ -248,19 +248,26 @@ def query_scalar(
     """Return a function running one read-only SQL query via `psql` and returning its output.
 
     For catalog state PostgREST does not serve (e.g. `pg_publication_tables`).
-    The query must not contain double quotes or `$`, since it is passed
-    through `sh -c`.
+    Pass constant queries only. The SQL is one argv element run without a
+    shell, so quoting is safe, but there is no parameter binding: never
+    build it from variable input.
     """
     _base_url, _jwt_secret, postgres = _postgrest_endpoint
 
     def _query(sql: str) -> str:
-        escaped_password = postgres.password.replace("'", "'\"'\"'")
         result = postgres.exec(
             [
-                "sh",
-                "-c",
-                f"PGPASSWORD='{escaped_password}' psql --username {postgres.username} "
-                f'--dbname {postgres.dbname} --host 127.0.0.1 -tAc "{sql}"',
+                "env",
+                f"PGPASSWORD={postgres.password}",
+                "psql",
+                "--username",
+                postgres.username,
+                "--dbname",
+                postgres.dbname,
+                "--host",
+                "127.0.0.1",
+                "-tAc",
+                sql,
             ]
         )
         if result.exit_code != 0:
