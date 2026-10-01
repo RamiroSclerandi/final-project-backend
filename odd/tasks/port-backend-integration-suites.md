@@ -63,7 +63,7 @@ containers on a 7.3 GB host, heavy and brittle in CI).
   Authenticated rename of `name`/`location_ref` and sensor `label` succeeds;
   update including `mac_address` fails with 42501 and the MAC is unchanged;
   anon update leaves the row unchanged. Route: inline (one test file).
-- [ ] T2 `auth-rls` + `measurements-rls`: authenticated reads `devices`,
+- [x] T2 `auth-rls` + `measurements-rls`: authenticated reads `devices`,
   `measurements`, `sensors`; anon gets an error or `[]`; authenticated INSERT
   into `measurements` is rejected. Route: inline.
 - [ ] T3 `node-health`: `raw_messages` returns `[]` for authenticated and anon;
@@ -93,6 +93,8 @@ containers on a 7.3 GB host, heavy and brittle in CI).
 ## Progress
 
 - 2026-10-01: plan created, option A chosen. No code written yet.
+- 2026-10-01: T1 done, commit ed1e635 (RED: wrong code XX000 vs actual 42501; GREEN 4 passed).
+- 2026-10-01: T2 done (RED: inverted assertions failed 6, wrong code XX000 failed 1; GREEN 7 passed).
 
 ## Next step
 
