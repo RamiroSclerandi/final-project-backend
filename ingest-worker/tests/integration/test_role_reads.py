@@ -30,26 +30,36 @@ def seeded_rows(service_role_client: Client, unique_mac: str) -> Iterator[Seeded
     """Seed one device, sensor and measurement; the device delete cascades to the rest."""
     device = {"mac_address": unique_mac, "name": f"Nodo {unique_mac}"}
     device_id = str(service_role_client.table("devices").insert(device).execute().data[0]["id"])
-    sensor_type = (
-        service_role_client.table("sensor_types").select("id").eq("name", "temperature").execute()
-    )
-    sensor = {"device_id": device_id, "type_id": sensor_type.data[0]["id"], "source": "reads-test"}
-    sensor_id = str(service_role_client.table("sensors").insert(sensor).execute().data[0]["id"])
-    service_role_client.table("measurements").insert(
-        {"sensor_id": sensor_id, "value": _SEEDED_VALUE, "timestamp": "2026-01-01T00:00:00Z"}
-    ).execute()
 
-    yield SeededRows(device_id=device_id, sensor_id=sensor_id)
+    try:
+        sensor_type = (
+            service_role_client.table("sensor_types")
+            .select("id")
+            .eq("name", "temperature")
+            .execute()
+        )
+        sensor = {
+            "device_id": device_id,
+            "type_id": sensor_type.data[0]["id"],
+            "source": "reads-test",
+        }
+        sensor_id = str(service_role_client.table("sensors").insert(sensor).execute().data[0]["id"])
+        service_role_client.table("measurements").insert(
+            {"sensor_id": sensor_id, "value": _SEEDED_VALUE, "timestamp": "2026-01-01T00:00:00Z"}
+        ).execute()
 
-    service_role_client.table("devices").delete().eq("id", device_id).execute()
+        yield SeededRows(device_id=device_id, sensor_id=sensor_id)
+    finally:
+        service_role_client.table("devices").delete().eq("id", device_id).execute()
 
 
 def _anon_read_ids(anon_client: Client, table: str, column: str, value: str) -> list[object]:
-    """Read `column` filtered to the seeded row; a permission error counts as no rows."""
-    try:
-        return anon_client.table(table).select(column).eq(column, value).execute().data
-    except APIError:
-        return []
+    """Read `column` filtered to the seeded row.
+
+    `anon` holds SELECT but RLS filters every row, so PostgREST returns an empty
+    list; any API error (a typo, a missing grant) must surface, not read as "no rows".
+    """
+    return anon_client.table(table).select(column).eq(column, value).execute().data
 
 
 def test_authenticated_reads_the_seeded_device(
