@@ -68,9 +68,9 @@ containers on a 7.3 GB host, heavy and brittle in CI).
   into `measurements` is rejected. Route: inline.
 - [x] T3 `node-health`: `raw_messages` returns `[]` for authenticated and anon;
   a sensor's first measurement appears in `v_latest_readings`. Route: inline.
-- [ ] T4 Realtime publication: `pg_publication_tables` for `supabase_realtime`
+- [x] T4 Realtime publication: `pg_publication_tables` for `supabase_realtime`
   includes `public.measurements` and `public.devices`. Route: inline.
-- [ ] T5 Signup disabled: parse `supabase/config.toml` with `tomllib` and
+- [x] T5 Signup disabled: parse `supabase/config.toml` with `tomllib` and
   assert `[auth] enable_signup = false`. Route: inline (unit test, no Docker).
 - [ ] T6 `aggregation-schedule`: dedicated `supabase/postgres` container,
   apply migrations, assert `pg_cron` in `pg_extension` and `cron.job` rows
