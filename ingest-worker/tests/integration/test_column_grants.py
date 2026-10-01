@@ -113,13 +113,13 @@ def test_anon_update_leaves_the_device_unchanged(
     device_id = _seed_device(service_role_client, unique_mac)
 
     try:
-        # anon has no UPDATE grant at all: it either errors or matches zero rows.
-        try:
-            anon_client.table("devices").update({"name": "Anon rename"}).eq(
-                "id", device_id
-            ).execute()
-        except APIError:
-            pass
+        # RLS leaves anon no visible row, so PostgREST answers with zero updated rows.
+        anon_result = (
+            anon_client.table("devices")
+            .update({"name": "Anon rename"})
+            .eq("id", device_id)
+            .execute()
+        )
 
         row = (
             service_role_client.table("devices")
@@ -129,6 +129,7 @@ def test_anon_update_leaves_the_device_unchanged(
             .execute()
             .data
         )
+        assert anon_result.data == []
         assert row == {"name": "Original name"}
     finally:
         service_role_client.table("devices").delete().eq("id", device_id).execute()
