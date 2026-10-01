@@ -36,6 +36,14 @@ let sensorTypeId: string | undefined;
 type RealtimeChannel = ReturnType<typeof authed.channel>;
 
 /** Resolves once the server confirms postgres_changes is streaming for the channel. */
+// supabase-js returns errors instead of throwing, so a failed cleanup would
+// otherwise leave seeded rows behind silently.
+function reportCleanupError(what: string, error: { message: string } | null) {
+  if (!error) return;
+  console.error(`cleanup failed for ${what}: ${error.message}`);
+  Deno.exitCode = 1;
+}
+
 function subscribed(channel: RealtimeChannel): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
@@ -198,9 +206,19 @@ try {
 } finally {
   await authed.removeAllChannels();
   // Deleting the device cascades to sensors and measurements.
-  if (deviceId) await admin.from("devices").delete().eq("id", deviceId);
-  if (sensorTypeId) {
-    await admin.from("sensor_types").delete().eq("id", sensorTypeId);
+  if (deviceId) {
+    const { error } = await admin.from("devices").delete().eq("id", deviceId);
+    reportCleanupError(`device ${deviceId}`, error);
   }
-  if (userId) await admin.auth.admin.deleteUser(userId);
+  if (sensorTypeId) {
+    const { error } = await admin.from("sensor_types").delete().eq(
+      "id",
+      sensorTypeId,
+    );
+    reportCleanupError(`sensor type ${sensorTypeId}`, error);
+  }
+  if (userId) {
+    const { error } = await admin.auth.admin.deleteUser(userId);
+    reportCleanupError(`user ${userId}`, error);
+  }
 }

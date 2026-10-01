@@ -115,6 +115,12 @@ containers on a 7.3 GB host, heavy and brittle in CI).
   and an ephemeral mosquitto: Realtime INSERT delivered in 479 ms, UPDATE in
   513 ms; broker round trip returned 200, payload `{"samplingInterval":15000}`
   on `dl/v1/<MAC>/config` and the `device_configs` row persisted.
+- 2026-10-01: review of T6-T8 approved (lineage review-ac449b4303ead55b) with
+  three non-blocking findings, applied in a follow-up commit: both manual
+  scripts now report failed cleanup and exit non-zero, and the broker script
+  asserts the config row did not already hold the target value. Re-run against
+  `supabase start`: INSERT 263 ms, UPDATE 520 ms, broker round trip PASS, both
+  exit 0.
 
 ## Next step
 

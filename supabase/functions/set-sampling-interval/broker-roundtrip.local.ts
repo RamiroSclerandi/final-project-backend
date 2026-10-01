@@ -55,6 +55,14 @@ function waitForMessage(
   });
 }
 
+// supabase-js returns errors instead of throwing, so a failed cleanup would
+// otherwise leave seeded rows behind silently.
+function reportCleanupError(what: string, error: { message: string } | null) {
+  if (!error) return;
+  console.error(`cleanup failed for ${what}: ${error.message}`);
+  Deno.exitCode = 1;
+}
+
 function subscribe(
   client: ReturnType<typeof mqtt.connect>,
   topic: string,
@@ -86,6 +94,22 @@ try {
     throw new Error(`failed to seed device: ${deviceError?.message}`);
   }
   deviceId = device.id;
+
+  // The persisted-value check below only proves the write if the row did not
+  // already hold the target value before the call.
+  const { data: priorConfig, error: priorError } = await admin
+    .from("device_configs")
+    .select("sampling_interval_ms")
+    .eq("device_id", deviceId)
+    .maybeSingle();
+  if (priorError) {
+    throw new Error(`failed to read prior config: ${priorError.message}`);
+  }
+  if (priorConfig?.sampling_interval_ms === SAMPLING_INTERVAL_MS) {
+    throw new Error(
+      `device_configs already holds ${SAMPLING_INTERVAL_MS}ms before the call`,
+    );
+  }
 
   const { data: signIn, error: signInError } = await createClient(
     API_URL,
@@ -148,6 +172,12 @@ try {
   );
 } finally {
   subscriber?.end(true);
-  if (deviceId) await admin.from("devices").delete().eq("id", deviceId);
-  if (userId) await admin.auth.admin.deleteUser(userId);
+  if (deviceId) {
+    const { error } = await admin.from("devices").delete().eq("id", deviceId);
+    reportCleanupError(`device ${deviceId}`, error);
+  }
+  if (userId) {
+    const { error } = await admin.auth.admin.deleteUser(userId);
+    reportCleanupError(`user ${userId}`, error);
+  }
 }
