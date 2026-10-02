@@ -46,9 +46,9 @@ already understood from reading `main.py`, `hivemq.py`, `supabase_sink.py`,
       registry calls and `update_device_last_seen`.
 - [x] T3 (B-3) Rejected MQTT credentials (`Bad user name or password`,
       `Not authorized`) stop the client and make `start()` raise.
-- [ ] T4 (B-4) A non-zero device `ts` is always tagged `ts_source = "device"`.
-- [ ] T5 (B-5) README test counts; decide the two untracked demo SQL files.
-- [ ] T6 Update the audit document with the status and evidence of each ID.
+- [x] T4 (B-4) A non-zero device `ts` is always tagged `ts_source = "device"`.
+- [x] T5 (B-5) README test counts; decide the two untracked demo SQL files.
+- [x] T6 Update the audit document with the status and evidence of each ID.
 
 ## Progress and evidence
 
@@ -57,6 +57,9 @@ already understood from reading `main.py`, `hivemq.py`, `supabase_sink.py`,
 | T1 (B-1) | `a65c05a` | 3 new in `tests/test_main.py`, RED then GREEN | medium, under budget |
 | T2 (B-2) | `a875c5e` | 8 new in `tests/sink/test_supabase_sink.py`, RED then GREEN (the 4xx case passed before, as expected) | medium, slice budget reached: review granted, approved and acknowledged (lineage `review-761c523bbe4997fa`, one reliability lens) |
 | T3 (B-3) | `343e9a2` | 3 new in `tests/sources/test_hivemq.py`, RED (import error) then GREEN | medium, under budget (reviewed boundary `a875c5e`) |
+| PR 1 | #32, merged as `b1a17fc` | - | whole branch reviewed at the stop hook: granted, approved, acknowledged (lineage `review-65ed890a09da034c`) |
+| T4 (B-4) | `91be2a7` | 1 new in `tests/domain/test_normalize.py`, RED then GREEN | see PR 2 |
+| T5 (B-5) | `841c702` | README now says 150 unit, 32 integration (counted on `91be2a7`) | passive documentation |
 
 Gate on `343e9a2`: `uv run pytest -q` 149 passed; `uv run pytest -m integration -q`
 32 passed; `ruff check`, `ruff format --check`, `mypy src` clean. Deno checks not
@@ -87,7 +90,25 @@ Review findings (informational, non-blocking) and disposition:
 - Partial registry failure mid-payload is untested: replay is idempotent; not
   added, out of B-2's stated scope.
 
+Second review (whole PR 1 branch), dispositions:
+
+- Nested retries between row building and `last_seen`: refuted, `_touch_device`
+  runs after the rows are built, not inside `_to_row`.
+- A retried archive can leave an unprocessed duplicate `raw_messages` row: true
+  and accepted; it adds noise to the `processed=false` monitor. A real fix
+  needs a unique key on `raw_messages` (schema migration), so it moves to B-7.
+- B-3 is only tested with a fake paho client: paho is pinned by `uv.lock`; an
+  integration test with a rejecting broker is an optional follow-up.
+
+B-5 decision (user, 2026-10-02): the demo SQL files are synthetic data and are
+not versioned. They were moved out of the repository to the user's Desktop.
+`demo-data-teardown.sql` has not been run against Supabase Cloud yet; the user
+runs it before the real capture.
+
+B-4: with `ts != 0` the reading is always tagged `device`; `meta.ts_src` is no
+longer read by `normalize`.
+
 ## Next step
 
-Push `fix/worker-unattended-hardening`, open PR 1, wait for merge. Then T4 and
-T5 on a new branch from `main`.
+PR 2 (`fix/device-timestamp-source`) awaits review and merge. Feature complete
+after that.
