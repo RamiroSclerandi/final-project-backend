@@ -1,10 +1,9 @@
--- Authoritative (boot, seq) gap query (spec "Automatic Reconnection, Resume,
--- and Outage Visibility", CA-8; design decision D10).
+-- Authoritative (boot, seq) gap query.
 --
 -- The worker's own `SeqGapTracker` (src/ingest/observability.py) only gives
--- a live, non-authoritative signal while the process is running. CA-8
--- measures a window during which the worker was DOWN, so a counter living
--- in that process is structurally incapable of observing its own absence.
+-- a live, non-authoritative signal while the process is running. A gap that
+-- spans a window during which the worker was DOWN is invisible to a counter
+-- living in that process.
 -- This query is the ground truth: it runs over `measurements.boot`/`seq`,
 -- which are persisted independently of whether the worker was up to see
 -- them land.
@@ -22,8 +21,7 @@
 -- capture pair `tests/fixtures/live_capture_seq7.json` /
 -- `live_capture_seq8.json`) since PostgREST offers no way to run a window
 -- function from the worker itself. Run this file directly against Postgres
--- (psql, or the Supabase SQL editor) for the authoritative check — see
--- Phase 12, task 12.5 of sdd/worker-ingesta-mqtt/tasks.
+-- (psql, or the Supabase SQL editor) for the authoritative check.
 --
 -- Usage: replace :device_mac with the target device's mac_address, or drop
 -- the WHERE clause entirely to scan every device at once.

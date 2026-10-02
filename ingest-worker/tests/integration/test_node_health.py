@@ -1,4 +1,4 @@
-"""Node-health read paths (ported from the frontend node-health suite).
+"""Node-health read paths.
 
 `raw_messages` is diagnostic material with RLS enabled and no policy, so no
 user role may read it. A sensor with no measurements is invisible in

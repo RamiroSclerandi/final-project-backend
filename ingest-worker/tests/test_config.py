@@ -1,8 +1,6 @@
-"""RED/GREEN tests for startup configuration loading and validation.
+"""Tests for startup configuration loading and validation.
 
-See docs/SDD_Worker_Ingesta.md section 6 and design decisions D2, D4, D7
-(sdd/worker-ingesta-mqtt/design) for the configuration contract this module
-enforces. Every value here is a dummy test value, never a real credential.
+Every value here is a dummy test value, never a real credential.
 """
 
 import pytest

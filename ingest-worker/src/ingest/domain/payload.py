@@ -1,9 +1,9 @@
 """Pydantic models for the frozen `datalogger.v1` MQTT payload contract.
 
-See docs/SDD_Worker_Ingesta.md section 2.4 for the frozen field table this
-module enforces: reject any `v` other than 1, `dev` must be 12 uppercase hex
-characters, `ch[].val` is required exactly when `ch[].ok` is true, and
-`ch[].min`/`max`/`n` only appear together when `n > 1`.
+This module enforces the frozen field table: reject any `v` other than 1,
+`dev` must be 12 uppercase hex characters, `ch[].val` is required exactly
+when `ch[].ok` is true, and `ch[].min`/`max`/`n` only appear together when
+`n > 1`.
 """
 
 import re

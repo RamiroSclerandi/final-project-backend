@@ -31,6 +31,6 @@ $$;
 -- Supabase Cloud grants anon and authenticated every privilege on each new
 -- table in `public` at creation time and relies on RLS; migrations narrow it
 -- afterwards (e.g. the REVOKE on sensors). Without this, the harness hides a
--- permissive write policy behind a missing GRANT (audit G-13).
+-- permissive write policy behind a missing GRANT.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated;

@@ -3,8 +3,7 @@
 -- and `authenticated` SELECT on every new relation in `public` at creation
 -- time, including materialized views and views -- which is exactly what
 -- made mv_measurements_hourly, mv_measurements_daily and v_latest_readings
--- readable by `anon` with no session (measured and confirmed in
--- proyecto-final/matview-anon-leak and proyecto-final/view-security-invoker-leak).
+-- readable by `anon` with no session.
 --
 -- Applied right after the base schema migration and before any later
 -- migration, so a relation-exposure fix that revokes `anon` afterward is not

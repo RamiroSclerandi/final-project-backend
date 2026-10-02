@@ -1,8 +1,6 @@
 """Structured logging and in-process metrics for the ingestion worker.
 
-See docs/SDD_Worker_Ingesta.md section 5 and design decisions D10 (the
-`(boot, seq)` gap) and D11 (metrics transport) (sdd/worker-ingesta-mqtt/
-design). This module is deliberately self-contained: it owns exactly the
+This module is deliberately self-contained: it owns exactly the
 counters that have no existing home elsewhere. The transport's
 `dropped_count`/`oversized_count` (`ingest.sources.hivemq.HiveMQSource`) and
 the sink's `batches_written_count`/`batch_retries_count`/
@@ -12,13 +10,11 @@ the sink's `batches_written_count`/`batch_retries_count`/
 so each counter is incremented in exactly one place.
 
 Wiring `record_*` calls and `SeqGapTracker.observe()` into the running
-transport/sink is the composition root's job (Phase 11, out of scope here);
-this module exposes the tested, standalone units it will drive, matching how
-`MeasurementSink` exposed `handle_message`/`flush_if_due` ahead of Phase 11's
-queue-draining loop.
+transport/sink is the composition root's job; this module only exposes the
+standalone units it drives.
 
-The `(boot, seq)` gap itself has two independent implementations by design
-(decision D10): the live `SeqGapTracker` below is a non-authoritative,
+The `(boot, seq)` gap itself has two independent implementations by design:
+the live `SeqGapTracker` below is a non-authoritative,
 in-process early signal that cannot observe a gap caused by the worker being
 down; the authoritative check is `docs/queries/seq_gaps.sql`, a SQL query
 over the persisted `measurements` table. `compute_seq_gaps` is a Python port
@@ -64,7 +60,7 @@ def configure_logging(level: str) -> None:
     """Configure the root logger for one JSON object per line on stdout.
 
     This worker is a containerized, long-lived process with stdout as its
-    only log transport (design decision D11) — never a file, never
+    only log transport — never a file, never
     rotation, never a logging framework beyond the standard library.
 
     Args:
@@ -136,7 +132,7 @@ class Metrics:
             raise ValueError(f"unknown message kind: {kind!r}")
 
     def record_raw_message_archived(self) -> None:
-        """Record one message archived to `raw_messages` (CA-7)."""
+        """Record one message archived to `raw_messages`."""
         self.raw_messages_archived_total += 1
 
     def record_measurement_rows(self, submitted: int, written: int) -> None:
@@ -144,8 +140,8 @@ class Metrics:
 
         Args:
             submitted: Rows sent to `upsert_measurements`.
-            written: Rows the upsert response actually returned (spike S1:
-                `submitted - written` is the exact duplicate count, already
+            written: Rows the upsert response actually returned
+                (`submitted - written` is the exact duplicate count, already
                 tracked by `MeasurementSink.duplicates_skipped_count` and
                 surfaced by `build_metrics_snapshot` — this records the two
                 inputs, not a third derived counter).
@@ -158,11 +154,11 @@ class Metrics:
         self.channels_failed_total += count
 
     def record_device_status_update(self) -> None:
-        """Record one retained online/offline status update (CA-9)."""
+        """Record one retained online/offline status update."""
         self.device_status_updates_total += 1
 
     def record_seq_gap_detected(self) -> None:
-        """Record one live, non-authoritative `(boot, seq)` gap signal (D10)."""
+        """Record one live, non-authoritative `(boot, seq)` gap signal."""
         self.seq_gap_detected_total += 1
 
 
@@ -229,17 +225,17 @@ def log_metrics_snapshot(
     source: SourceCounters | None = None,
     sink: SinkCounters | None = None,
 ) -> None:
-    """Emit one periodic JSON-line `metrics` record on stdout (D11)."""
+    """Emit one periodic JSON-line `metrics` record on stdout."""
     log_event("metrics", **build_metrics_snapshot(metrics, source, sink))
 
 
 def count_failed_channels(payload: DataloggerV1) -> int:
     """Count channels with `ok: false` in one validated envelope.
 
-    Closes the observability gap the spec leaves open: there is no
-    persisted metric for per-channel failure rate, because a failed channel
-    produces no `measurements` row (see `ingest.domain.normalize`) and
-    becomes invisible again once the raw message is archived.
+    There is no persisted metric for per-channel failure rate, because a
+    failed channel produces no `measurements` row (see
+    `ingest.domain.normalize`) and becomes invisible again once the raw
+    message is archived.
 
     Args:
         payload: A validated `datalogger.v1` envelope.
@@ -251,11 +247,11 @@ def count_failed_channels(payload: DataloggerV1) -> int:
 
 
 class SeqGapTracker:
-    """Live, non-authoritative `(boot, seq)` signal, per device (D10).
+    """Live, non-authoritative `(boot, seq)` signal, per device.
 
     This is a convenience early-warning signal only, computed while the
     worker is running. It CANNOT observe a gap that occurred while the
-    worker was down — CA-8 measures exactly that window — which is why the
+    worker was down, which is why the
     authoritative check is `compute_seq_gaps`/`docs/queries/seq_gaps.sql`
     over the persisted `measurements` table instead.
     """

@@ -1,7 +1,6 @@
-"""RED/GREEN tests for the frozen `datalogger.v1` payload contract.
+"""Tests for the frozen `datalogger.v1` payload contract.
 
-See docs/SDD_Worker_Ingesta.md section 2.4 for the field table these tests
-enforce, and tests/fixtures/ for the real broker captures used as inputs.
+See tests/fixtures/ for the real broker captures used as inputs.
 """
 
 import json
@@ -24,7 +23,7 @@ def _full_envelope(channels_fixture_name: str) -> dict[str, Any]:
     """Merge a channel-only fragment (section 2.2/2.3 style) onto a full envelope.
 
     `aggregated.json` and `failed_channel.json` are verbatim `{"ch": [...]}`
-    fragments straight from the spec doc, not complete messages — the
+    fragments from the payload contract, not complete messages — the
     envelope fields (`v`, `dev`, `ts`, `seq`, `meta`) come from
     `no_aggregation.json`.
     """

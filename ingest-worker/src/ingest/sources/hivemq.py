@@ -1,16 +1,14 @@
 """HiveMQ Cloud source: paho-mqtt v2 client, TLS, bounded queue.
 
-See docs/SDD_Worker_Ingesta.md and design decisions D1-D3, D6-D8
-(sdd/worker-ingesta-mqtt/design). `on_connect(client, userdata, flags,
-reason_code, properties)` and `on_disconnect`/`on_subscribe` use the paho v2
-callback signatures (`CallbackAPIVersion.VERSION2`); `on_message(client,
-userdata, message)` is unchanged from v1 (research claim C1,
-sdd/worker-ingesta-mqtt/research).
+`on_connect(client, userdata, flags, reason_code, properties)` and
+`on_disconnect`/`on_subscribe` use the paho v2 callback signatures
+(`CallbackAPIVersion.VERSION2`); `on_message(client, userdata, message)` is
+unchanged from v1.
 
 `on_message` runs on paho's own network thread and must never block on slow
 work: it only measures payload size and puts a value onto one of the two
 bounded queues below. All other I/O (archiving, parsing, persistence)
-belongs to a separate writer thread (Phase 8, out of scope here) that drains
+belongs to a separate writer thread that drains
 `inbound_queue`/`status_queue`.
 """
 
@@ -30,14 +28,13 @@ from ingest.sources.base import DeviceStatus, InboundMessage, device_mac_from_to
 
 logger = logging.getLogger(__name__)
 
-# Exponential backoff bounds for paho's built-in reconnect (research claim
-# C2). Matches the values already fixed in the design's Error Taxonomy table:
-# start at 1s, cap at 60s, reset to 1s on the next successful CONNACK.
+# Exponential backoff bounds for paho's built-in reconnect: start at 1s,
+# cap at 60s, reset to 1s on the next successful CONNACK.
 _RECONNECT_MIN_DELAY_S = 1
 _RECONNECT_MAX_DELAY_S = 60
 
 # CONNACK reasons no reconnect can fix: retrying them forever hides a bad
-# credential behind an apparently healthy process (B-3).
+# credential behind an apparently healthy process.
 _AUTH_FAILURE_REASONS = frozenset({"Bad user name or password", "Not authorized"})
 
 
@@ -86,7 +83,7 @@ class HiveMQSource:
         self._client.username_pw_set(settings.mqtt_user, settings.mqtt_password.get_secret_value())
         # Empty MQTT_CA_CERT_PATH means the default system/certifi CA bundle;
         # a configured path pins a custom CA. tls_insecure_set is never
-        # called (design decision D8; spike S2 is still open).
+        # called.
         self._client.tls_set(ca_certs=settings.mqtt_ca_cert_path or None)
         self._client.reconnect_delay_set(
             min_delay=_RECONNECT_MIN_DELAY_S, max_delay=_RECONNECT_MAX_DELAY_S
@@ -126,7 +123,7 @@ class HiveMQSource:
 
     @property
     def dropped_count(self) -> int:
-        """Messages dropped because a queue was full (design decision D3)."""
+        """Messages dropped because a queue was full."""
         with self._counts_lock:
             return self._dropped_count
 
@@ -153,7 +150,7 @@ class HiveMQSource:
         # Subscriptions are issued here every time on_connect fires —
         # including after an automatic reconnect — never once at startup.
         # Correct whether or not the broker restores subscriptions, and
-        # eliminates the connected-but-deaf failure mode (design decision D6).
+        # eliminates the connected-but-deaf failure mode.
         client.subscribe(self._settings.mqtt_topic_data, qos=0)
         client.subscribe(self._settings.mqtt_topic_status, qos=0)
         logger.info(

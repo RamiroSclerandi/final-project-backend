@@ -1,4 +1,4 @@
-"""pg_cron refresh schedule (port of the dropped frontend `aggregation-schedule` suite).
+"""pg_cron refresh schedule.
 
 The shared harness runs a bare `postgres:16`, which has no pg_cron, so the
 migration's guarded schedule block is skipped there. This module starts its

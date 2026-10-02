@@ -1,4 +1,4 @@
-"""G-13: `device_configs` is read-only to users; only the Edge Function (service role) writes."""
+"""`device_configs` is read-only to users; only the Edge Function (service role) writes."""
 
 from collections.abc import Callable
 from pathlib import Path

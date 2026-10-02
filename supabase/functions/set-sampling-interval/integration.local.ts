@@ -6,7 +6,7 @@
 // (real RLS, real JWT) and an injected fake for the MQTT boundary: this
 // session holds no real HiveMQ credentials (they are Cloud-only secrets),
 // so the broker step is covered instead by mqtt.test.ts (topic/payload
-// shape) and by the S3 spike's observer-confirmed live publish.
+// shape).
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { createHandler } from "./index.ts";
 

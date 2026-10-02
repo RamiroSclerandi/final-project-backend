@@ -1,8 +1,7 @@
-"""RED/GREEN tests converting a validated payload into canonical readings.
+"""Tests converting a validated payload into canonical readings.
 
-See docs/SDD_Worker_Ingesta.md section 5.2-5.3 and the spec requirements
-"Unsynchronized Clock Handling" / "Failed Channel Produces No Row"
-(sdd/worker-ingesta-mqtt/spec) for the behavior these tests enforce.
+Covers unsynchronized-clock handling and the rule that a failed channel
+produces no row.
 """
 
 import json
@@ -145,10 +144,10 @@ def test_non_aggregated_channel_has_no_min_max_sample_count() -> None:
 
 
 def test_live_capture_pair_has_consecutive_seq_and_boot_with_no_gap() -> None:
-    """Real broker capture (observation 329): consecutive seq 7/8, 15s apart.
+    """Real broker capture: consecutive seq 7/8, 15s apart.
 
-    This is the negative case for later (boot, seq) gap detection (Phase 9,
-    out of scope here) — this pair must never be flagged as a discontinuity.
+    This is the negative case for (boot, seq) gap detection: this pair must
+    never be flagged as a discontinuity.
     """
     first = DataloggerV1.model_validate(_load_fixture("live_capture_seq7.json"))
     second = DataloggerV1.model_validate(_load_fixture("live_capture_seq8.json"))

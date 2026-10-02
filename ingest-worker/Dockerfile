@@ -35,6 +35,5 @@ USER worker
 
 # Exec form (not shell form) so the Python process is PID 1 and receives
 # SIGTERM directly -- a shell-form CMD would put a shell at PID 1 and the
-# signal would never reach the interpreter (design decision D5, Shutdown
-# Sequence section, sdd/worker-ingesta-mqtt/design).
+# signal would never reach the interpreter.
 CMD ["python", "-m", "ingest.main"]

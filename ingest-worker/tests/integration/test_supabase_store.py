@@ -11,9 +11,8 @@ here (see the module docstring in tests/integration/conftest.py):
    `TypeError` from an unexpected keyword argument -- exactly the production
    failure -- instead of silently passing against a fake.
 
-The batch-upsert tests turn spike S1's measured PostgREST behavior
-(`on_conflict=...,ignore_duplicates=True` is partial, not atomic) into a
-regression guard.
+The batch-upsert tests guard the measured PostgREST behavior
+(`on_conflict=...,ignore_duplicates=True` is partial, not atomic).
 """
 
 from datetime import UTC, datetime, timedelta

@@ -1,4 +1,4 @@
-"""Column-scoped UPDATE grants on `devices` and `sensors` (ported from the frontend suite).
+"""Column-scoped UPDATE grants on `devices` and `sensors`.
 
 RLS decides which rows an `authenticated` user can reach, not which columns;
 the column restriction is a GRANT. These tests prove the grant surface lets

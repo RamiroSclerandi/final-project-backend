@@ -1,7 +1,6 @@
 """Worker configuration: loaded and validated from the environment at startup.
 
-See `.env.example` for the full variable contract, docs/SDD_Worker_Ingesta.md
-section 6, and design decisions D2, D4, D7 (sdd/worker-ingesta-mqtt/design).
+See `.env.example` for the full variable contract.
 Every required variable that is missing, blank, or out of bounds raises a
 `pydantic.ValidationError` naming the exact field before any MQTT or
 Supabase connection is attempted. Secrets never have a default value, and
@@ -35,7 +34,7 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_service_role_key: SecretStr
 
-    # Ingestion queue and batching (design decisions D2, D4).
+    # Ingestion queue and batching.
     ingest_queue_max: int = Field(default=1000, gt=0)
     mqtt_max_payload_bytes: int = Field(default=16384, gt=0)
     batch_max_size: int = Field(default=100, gt=0)
@@ -61,7 +60,6 @@ class Settings(BaseSettings):
 
         Stable for the lifetime of this `Settings` instance. A unique suffix
         per process means an overlapping deploy can never share a client id,
-        which avoids the MQTT-3.1.4-2 mutual disconnect loop (design
-        decision D7).
+        which avoids the MQTT-3.1.4-2 mutual disconnect loop.
         """
         return f"{self.mqtt_client_id_prefix}-{self._client_id_suffix}"

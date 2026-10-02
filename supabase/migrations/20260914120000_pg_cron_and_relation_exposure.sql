@@ -1,14 +1,11 @@
 -- Activates the pg_cron refresh schedule left commented out in the
--- canonical schema, and closes the relation-exposure defect measured and
--- confirmed in proyecto-final/matview-anon-leak and
--- proyecto-final/view-security-invoker-leak: `anon` could read both
+-- canonical schema, and closes a relation-exposure defect: `anon` could read both
 -- materialized views and v_latest_readings with no session, and
 -- v_latest_readings executed with its owner's privileges, bypassing the RLS
 -- of every table it joins.
 --
 -- The REVOKE/GRANT statements below re-assert an end state already applied
--- manually on the deployed Cloud project as a stopgap (see
--- sdd/frontend-dashboard/delivery-and-remediation); they are idempotent, so
+-- manually on the deployed Cloud project as a stopgap; they are idempotent, so
 -- running them again there changes nothing. Without this migration the
 -- manual fix is one schema recreation away from being undone, since
 -- 20260909000000_initial_schema.sql recreates the schema by design.
@@ -53,7 +50,7 @@ $$;
 
 -- =============================================================================
 -- 2. Materialized views: anon has no access; a matview cannot carry RLS, so
---    GRANT/REVOKE is its entire access-control surface (REQ-AGG-4)
+--    GRANT/REVOKE is its entire access-control surface
 -- =============================================================================
 
 REVOKE ALL ON mv_measurements_hourly, mv_measurements_daily FROM anon;

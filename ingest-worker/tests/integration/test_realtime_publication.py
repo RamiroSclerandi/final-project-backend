@@ -1,4 +1,4 @@
-"""Realtime publication membership (proxy for the dropped frontend delivery tests).
+"""Realtime publication membership.
 
 Realtime delivery itself is a Supabase platform concern, so this asserts the
 precondition this repository owns: `measurements` and `devices` belong to the

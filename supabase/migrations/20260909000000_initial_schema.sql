@@ -6,7 +6,7 @@
 -- =============================================================================
 -- Datalogger — Esquema PostgreSQL / Supabase
 --
--- Contrato de ingesta: datalogger.v1 (ver docs/sdd_plataforma_datos.md §3)
+-- Contrato de ingesta: datalogger.v1
 -- Modelo de acceso: instalación única, preparada para multiusuario (owner_id)
 --
 -- ADVERTENCIA: este archivo RECREA el esquema. La clave primaria de

@@ -1,10 +1,9 @@
-"""RED/GREEN tests for structured logging, the metrics registry, and the
+"""Tests for structured logging, the metrics registry, and the
 Python port of the `(boot, seq)` gap query.
 
-See docs/SDD_Worker_Ingesta.md and design decisions D10 (the `(boot, seq)`
-gap is authoritative only as a SQL query over persisted `measurements`,
-never an in-process counter) and D11 (metrics transport is a periodic
-JSON-line log record on stdout) (sdd/worker-ingesta-mqtt/design).
+The `(boot, seq)` gap is authoritative only as a SQL query over persisted
+`measurements`, never an in-process counter; metrics go out as a periodic
+JSON-line log record on stdout.
 `compute_seq_gaps` mirrors `docs/queries/seq_gaps.sql` exactly, so its
 `SELECT DISTINCT`-before-window-function contract is testable without a
 live Postgres connection — no third party is mocked, per project
@@ -246,7 +245,7 @@ def test_log_metrics_snapshot_writes_one_json_record_with_every_merged_field(
     assert record["sink_batches_total"] == 1
 
 
-# --- Per-channel failure count (closes the spec's observability gap) -------
+# --- Per-channel failure count ---------------------------------------------
 
 
 def test_count_failed_channels_is_zero_when_every_channel_succeeded() -> None:
@@ -261,7 +260,7 @@ def test_count_failed_channels_counts_channels_with_ok_false() -> None:
     assert count_failed_channels(payload) == 1
 
 
-# --- Live (boot, seq) signal (D10) ------------------------------------------
+# --- Live (boot, seq) signal --------------------------------------------
 
 
 def test_seq_gap_tracker_reports_no_gap_for_the_first_message_of_a_device() -> None:
@@ -362,7 +361,7 @@ def test_compute_seq_gaps_reports_a_real_gap_even_amid_duplicate_channel_rows() 
 def test_compute_seq_gaps_finds_no_gap_for_the_real_two_channel_capture_pair() -> None:
     """The exact negative case tests/fixtures ships for this: two real
     messages, same boot, consecutive seq, two channels each -- must never
-    be flagged (sdd/worker-ingesta-mqtt/tasks, Phase 9 note)."""
+    be flagged."""
     first = DataloggerV1.model_validate(_load_fixture("live_capture_seq7.json"))
     second = DataloggerV1.model_validate(_load_fixture("live_capture_seq8.json"))
     rows = [

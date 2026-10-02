@@ -1,11 +1,8 @@
 """Resolve a `Reading` to its `sensor_id`, auto-registering unseen devices,
 sensor types, and sensors, backed by a bounded-TTL cache.
 
-See docs/SDD_Worker_Ingesta.md section 5.3 for the resolution algorithm and
-sdd/worker-ingesta-mqtt/design's "Registry Caching" section for the caching
-rationale. This is what lets a new node or a new channel register itself
-without a code deploy — the spec requirement "Device and Sensor
-Auto-Registration" (CA-3, CA-4).
+This is what lets a new node or a new channel register itself without a code
+deploy.
 """
 
 import time
@@ -32,7 +29,7 @@ class SensorTypeRecord:
     """One row of `sensor_types`, narrowed to what resolution needs.
 
     `expected_min`/`expected_max` are the quality-banding thresholds the
-    sink (Phase 8) compares each reading against (SDD section 5.4). They
+    sink compares each reading against. They
     are editable through the web platform, so a cached record can lag a
     threshold edit by up to one TTL — see `Registry.expected_range`.
     """
@@ -94,13 +91,12 @@ class RegistryResolutionError(RuntimeError):
 class Registry:
     """Resolves `Reading`s to `sensor_id`, auto-registering unseen rows.
 
-    Implements docs/SDD_Worker_Ingesta.md section 5.3: cache hit, else
+    Resolution is a cache hit, else
     devices -> sensor_types -> sensors (SELECT, INSERT-ON-CONFLICT-DO-NOTHING,
     SELECT again), then cache and return.
 
     Threading contract: an instance is confined to the single writer thread
-    that owns the pending batch and the Supabase client (see the
-    architecture diagram in sdd/worker-ingesta-mqtt/design). It takes no
+    that owns the pending batch and the Supabase client. It takes no
     lock and is not safe for concurrent use from more than one thread.
 
     Cache scope: the resolved `sensor_id` is cached, keyed by
@@ -114,11 +110,10 @@ class Registry:
     at most one TTL window.
 
     A second, separate TTL-bound cache holds the resolved `SensorTypeRecord`
-    (including `expected_min`/`expected_max`) keyed by `(name, unit)` — the
-    design's documented side cache. Its thresholds ARE mutable through the
-    web platform, so quality banding (`expected_range`) can be stale for up
-    to one TTL window after a threshold edit. Accepted and documented, same
-    as the design's risk list: ids themselves cannot go stale this way.
+    (including `expected_min`/`expected_max`) keyed by `(name, unit)`. Its
+    thresholds ARE mutable through the web platform, so quality banding
+    (`expected_range`) can be stale for up to one TTL window after a
+    threshold edit. Accepted: ids themselves cannot go stale this way.
     """
 
     def __init__(
@@ -157,7 +152,7 @@ class Registry:
     def expected_range(self, channel: str, unit: str) -> tuple[float | None, float | None]:
         """Return the accepted `[expected_min, expected_max]` range for a channel/unit.
 
-        Used by the sink (Phase 8) for quality banding (SDD section 5.4).
+        Used by the sink for quality banding.
         Backed by the same TTL-bound `sensor_types` cache `resolve()`
         populates, so calling this after `resolve()` for the same channel
         issues no further query.
