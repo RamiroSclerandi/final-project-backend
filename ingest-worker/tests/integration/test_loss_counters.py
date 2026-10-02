@@ -71,8 +71,9 @@ def test_loss_counters_round_trip_through_the_worker_upsert(
     assert stored == [{"lost": 3, "store_drop": None}]
 
 
+@pytest.mark.parametrize("column", ["lost", "store_drop"])
 def test_negative_loss_counters_are_rejected(
-    store: SupabaseStore, service_role_client: Client, unique_mac: str
+    store: SupabaseStore, service_role_client: Client, unique_mac: str, column: str
 ) -> None:
     sensor_id = _sensor_id(store, unique_mac)
 
@@ -82,7 +83,7 @@ def test_negative_loss_counters_are_rejected(
                 "sensor_id": sensor_id,
                 "value": 1.0,
                 "timestamp": datetime(2026, 10, 2, 12, 0, tzinfo=UTC).isoformat(),
-                "store_drop": -1,
+                column: -1,
             }
         ).execute()
 
@@ -110,23 +111,23 @@ def test_rollback_drops_the_loss_counters_and_reapplying_restores_them(
 _ATTRIBUTION_QUERY = (
     Path(__file__).resolve().parents[2] / "docs" / "queries" / "loss_attribution.sql"
 )
-_ATTRIBUTION_MAC = "10550A770001"
+_Counters = tuple[int, int | None, int | None]
 
 
-def test_loss_attribution_splits_a_seq_gap_into_buffer_drops_and_transport_loss(
+def _attribution(
     store: SupabaseStore,
     service_role_client: Client,
     query_scalar: Callable[[str], str],
-) -> None:
-    temperature = _sensor_id(store, _ATTRIBUTION_MAC)
+    mac: str,
+    messages: list[_Counters],
+) -> str:
+    """Store `(seq, lost, store_drop)` messages on two channels of boot 1 and attribute them."""
+    temperature = _sensor_id(store, mac)
     pressure_type = store.select_sensor_type("pressure", "hPa")
-    assert pressure_type is not None
-    device = store.select_device_by_mac(_ATTRIBUTION_MAC)
-    assert device is not None
+    device = store.select_device_by_mac(mac)
+    assert pressure_type is not None and device is not None
     pressure = store.insert_sensor(device.id, pressure_type.id, "bmp280", "")
     assert pressure is not None
-    # Boot 1 sends seq 1, 2 and 5: seq 3 and 4 are missing, and the buffer
-    # reports one drop between seq 2 and 5, so one message died in transport.
     rows = [
         {
             "sensor_id": sensor_id,
@@ -138,15 +139,39 @@ def test_loss_attribution_splits_a_seq_gap_into_buffer_drops_and_transport_loss(
             "store_drop": store_drop,
         }
         for sensor_id in (temperature, pressure.id)
-        for seq, lost, store_drop in ((1, 0, 0), (2, 1, 0), (5, 2, 1))
+        for seq, lost, store_drop in messages
     ]
     service_role_client.table("measurements").insert(rows).execute()
     attribution_sql = _ATTRIBUTION_QUERY.read_text().strip().rstrip(";")
-
-    result = query_scalar(
-        "SELECT total_seq_gap || '|' || delta_store_drop || '|' || true_transport_loss"
-        f" || '|' || delta_lost FROM ({attribution_sql}) attribution"
-        f" WHERE mac_address = '{_ATTRIBUTION_MAC}'"
+    columns = ("total_seq_gap", "delta_store_drop", "true_transport_loss", "delta_lost")
+    shown = " || '|' || ".join(f"coalesce({column}::text, 'null')" for column in columns)
+    return query_scalar(
+        f"SELECT {shown} FROM ({attribution_sql}) attribution WHERE mac_address = '{mac}'"
     )
 
+
+def test_loss_attribution_splits_a_seq_gap_into_buffer_drops_and_transport_loss(
+    store: SupabaseStore,
+    service_role_client: Client,
+    query_scalar: Callable[[str], str],
+    unique_mac: str,
+) -> None:
+    # seq 3 and 4 are missing and the buffer reports one drop, so one message died in transport.
+    messages: list[_Counters] = [(1, 0, 0), (2, 1, 0), (5, 2, 1)]
+
+    result = _attribution(store, service_role_client, query_scalar, unique_mac, messages)
+
     assert result == "2|1|1|2"
+
+
+def test_loss_attribution_leaves_unreported_counters_unknown(
+    store: SupabaseStore,
+    service_role_client: Client,
+    query_scalar: Callable[[str], str],
+    unique_mac: str,
+) -> None:
+    messages: list[_Counters] = [(1, None, None), (2, None, None), (5, None, None)]
+
+    result = _attribution(store, service_role_client, query_scalar, unique_mac, messages)
+
+    assert result == "2|null|null|null"
