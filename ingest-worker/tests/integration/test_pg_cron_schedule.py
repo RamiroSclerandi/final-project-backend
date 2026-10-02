@@ -101,12 +101,32 @@ def test_pg_cron_extension_is_installed(cron_query: Callable[[str], str]) -> Non
     assert installed == "1"
 
 
-def test_refresh_jobs_are_scheduled_and_active(cron_query: Callable[[str], str]) -> None:
+def test_scheduled_jobs_are_registered_and_active(cron_query: Callable[[str], str]) -> None:
     jobs = cron_query(
         "SELECT jobname || '|' || schedule || '|' || active FROM cron.job ORDER BY jobname"
     )
 
     assert jobs.splitlines() == [
+        "purge-raw-messages|30 3 * * *|true",
         "refresh-daily|10 0 * * *|true",
         "refresh-hourly|5 * * * *|true",
     ]
+
+
+_RETENTION = "20261002120000_raw_messages_retention.sql"
+
+
+def test_retention_rollback_unschedules_the_purge_and_reapplying_restores_it(
+    cron_query: Callable[[str], str],
+) -> None:
+    purge_jobs = "SELECT count(*) FROM cron.job WHERE jobname = 'purge-raw-messages'"
+    rollback_sql = (_MIGRATIONS_DIR.parent / "rollbacks" / _RETENTION).read_text()
+    migration_sql = (_MIGRATIONS_DIR / _RETENTION).read_text()
+
+    cron_query(rollback_sql)
+    try:
+        assert cron_query(purge_jobs) == "0"
+    finally:
+        cron_query(migration_sql)
+
+    assert cron_query(purge_jobs) == "1"
