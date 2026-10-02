@@ -26,7 +26,8 @@ branch: whole-batch replay is idempotent under either outcome.
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -288,17 +289,20 @@ class MeasurementSink:
             error = f"topic MAC {topic_mac!r} does not match payload dev {payload.dev!r}"
             payload = None
 
-        raw_message_id = self._store.archive_raw_message(
-            topic=message.topic,
-            payload=message.payload,
-            received_at=message.received_at,
-            error=error,
+        raw_message_id = self._call_with_retry(
+            lambda: self._store.archive_raw_message(
+                topic=message.topic,
+                payload=message.payload,
+                received_at=message.received_at,
+                error=error,
+            )
         )
         if payload is None:
             logger.warning("archived unparseable message: topic=%s", message.topic)
             return
 
-        rows = [self._to_row(reading) for reading in normalize(payload, message.received_at)]
+        readings = normalize(payload, message.received_at)
+        rows = self._call_with_retry(lambda: [self._to_row(reading) for reading in readings])
         if rows:
             if not self._pending:
                 self._pending_since = self._clock()
@@ -317,7 +321,7 @@ class MeasurementSink:
         change is rare (one per connect/disconnect) and every one must be
         visible.
         """
-        self._registry.ensure_device(status.device_mac)
+        self._call_with_retry(lambda: self._registry.ensure_device(status.device_mac))
         self._store.update_device_status(status.device_mac, status.online, status.received_at)
 
     def flush_if_due(self) -> None:
@@ -364,8 +368,23 @@ class MeasurementSink:
         last_touch = self._device_last_touch.get(device_mac)
         if last_touch is not None and (self._clock() - last_touch) < _DEVICE_TOUCH_MIN_INTERVAL_S:
             return
-        self._store.update_device_last_seen(device_mac, at, firmware_version)
+        self._call_with_retry(
+            lambda: self._store.update_device_last_seen(device_mac, at, firmware_version)
+        )
         self._device_last_touch[device_mac] = self._clock()
+
+    def _call_with_retry[ResultT](self, operation: Callable[[], ResultT]) -> ResultT:
+        """Run a store or registry call, retrying a transient failure with the batch backoff.
+
+        Registry resolution is select-then-insert-on-conflict, so a replay is
+        idempotent; a replayed archive at worst stores the same message twice (B-2).
+        """
+        for delay in _RETRY_DELAYS_S:
+            try:
+                return operation()
+            except SinkTransientError:
+                self._sleep(delay)
+        return operation()
 
     def _write_batch_with_retry(self, rows: list[dict[str, Any]]) -> int:
         last_error: SinkTransientError | None = None
@@ -399,72 +418,80 @@ class SupabaseStore:
     # --- RegistryStore ---
 
     def select_device_by_mac(self, mac_address: str) -> DeviceRecord | None:
-        rows = (
-            self._client.table("devices")
-            .select("id,mac_address,name")
-            .eq("mac_address", mac_address)
-            .execute()
-            .data
-        )
+        with _classified_errors():
+            rows = (
+                self._client.table("devices")
+                .select("id,mac_address,name")
+                .eq("mac_address", mac_address)
+                .execute()
+                .data
+            )
         return DeviceRecord(**_row(rows[0])) if rows else None
 
     def insert_device(self, mac_address: str, name: str) -> DeviceRecord:
-        row = _row(
-            self._client.table("devices")
-            .insert({"mac_address": mac_address, "name": name})
-            .execute()
-            .data[0]
-        )
+        with _classified_errors():
+            row = _row(
+                self._client.table("devices")
+                .insert({"mac_address": mac_address, "name": name})
+                .execute()
+                .data[0]
+            )
         return DeviceRecord(id=row["id"], mac_address=row["mac_address"], name=row["name"])
 
     def select_sensor_type(self, name: str, unit: str) -> SensorTypeRecord | None:
-        rows = (
-            self._client.table("sensor_types")
-            .select("id,name,unit,expected_min,expected_max")
-            .eq("name", name)
-            .eq("unit", unit)
-            .execute()
-            .data
-        )
+        with _classified_errors():
+            rows = (
+                self._client.table("sensor_types")
+                .select("id,name,unit,expected_min,expected_max")
+                .eq("name", name)
+                .eq("unit", unit)
+                .execute()
+                .data
+            )
         return record_from_row(SensorTypeRecord, _row(rows[0])) if rows else None
 
     def insert_sensor_type(self, name: str, unit: str) -> SensorTypeRecord | None:
-        rows = (
-            self._client.table("sensor_types")
-            .upsert({"name": name, "unit": unit}, on_conflict="name,unit", ignore_duplicates=True)
-            .execute()
-            .data
-        )
+        with _classified_errors():
+            rows = (
+                self._client.table("sensor_types")
+                .upsert(
+                    {"name": name, "unit": unit}, on_conflict="name,unit", ignore_duplicates=True
+                )
+                .execute()
+                .data
+            )
         return record_from_row(SensorTypeRecord, _row(rows[0])) if rows else None
 
     def select_sensor(
         self, device_id: str, type_id: str, source: str, tag: str
     ) -> SensorRecord | None:
-        rows = (
-            self._client.table("sensors")
-            .select("id,device_id,type_id,source,tag")
-            .eq("device_id", device_id)
-            .eq("type_id", type_id)
-            .eq("source", source)
-            .eq("tag", tag)
-            .execute()
-            .data
-        )
+        with _classified_errors():
+            rows = (
+                self._client.table("sensors")
+                .select("id,device_id,type_id,source,tag")
+                .eq("device_id", device_id)
+                .eq("type_id", type_id)
+                .eq("source", source)
+                .eq("tag", tag)
+                .execute()
+                .data
+            )
         return record_from_row(SensorRecord, _row(rows[0])) if rows else None
 
     def insert_sensor(
         self, device_id: str, type_id: str, source: str, tag: str
     ) -> SensorRecord | None:
-        rows = (
-            self._client.table("sensors")
-            .upsert(
-                {"device_id": device_id, "type_id": type_id, "source": source, "tag": tag},
-                on_conflict="device_id,type_id,source,tag",
-                ignore_duplicates=True,
+        with _classified_errors():
+            rows = (
+                self._client.table("sensors")
+                .upsert(
+                    {"device_id": device_id, "type_id": type_id, "source": source, "tag": tag},
+                    on_conflict="device_id,type_id,source,tag",
+                    ignore_duplicates=True,
+                )
+                .execute()
+                .data
             )
-            .execute()
-            .data
-        )
         return record_from_row(SensorRecord, _row(rows[0])) if rows else None
 
     # --- SinkStore ---
@@ -472,20 +499,21 @@ class SupabaseStore:
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
     ) -> int:
-        rows = (
-            self._client.table("raw_messages")
-            .insert(
-                build_raw_message_row(
-                    topic=topic,
-                    payload=payload,
-                    received_at=received_at,
-                    error=error,
-                    source=self._source,
+        with _classified_errors():
+            rows = (
+                self._client.table("raw_messages")
+                .insert(
+                    build_raw_message_row(
+                        topic=topic,
+                        payload=payload,
+                        received_at=received_at,
+                        error=error,
+                        source=self._source,
+                    )
                 )
+                .execute()
+                .data
             )
-            .execute()
-            .data
-        )
         return int(_row(rows[0])["id"])
 
     def mark_raw_messages_processed(self, raw_message_ids: list[int]) -> None:
@@ -521,9 +549,21 @@ class SupabaseStore:
     def update_device_last_seen(
         self, device_mac: str, at: datetime, firmware_version: str | None
     ) -> None:
-        self._client.table("devices").update(
-            {"last_seen": at.isoformat(), "firmware_version": firmware_version}
-        ).eq("mac_address", device_mac).execute()
+        with _classified_errors():
+            self._client.table("devices").update(
+                {"last_seen": at.isoformat(), "firmware_version": firmware_version}
+            ).eq("mac_address", device_mac).execute()
+
+
+@contextmanager
+def _classified_errors() -> Iterator[None]:
+    """Map PostgREST failures to the sink's error taxonomy, so a caller can retry transient ones."""
+    try:
+        yield
+    except httpx.TransportError as exc:
+        raise SinkTransientError(str(exc)) from exc
+    except APIError as exc:
+        raise _classify_api_error(exc) from exc
 
 
 def _classify_api_error(exc: APIError) -> SinkTransientError | SinkPermanentError:
