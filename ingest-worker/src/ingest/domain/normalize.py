@@ -37,6 +37,8 @@ class Reading:
     rssi: int
     seq: int
     boot: int
+    lost: int | None = None
+    store_drop: int | None = None
 
 
 def normalize(payload: DataloggerV1, received_at: datetime) -> list[Reading]:
@@ -58,6 +60,10 @@ def normalize(payload: DataloggerV1, received_at: datetime) -> list[Reading]:
         recorded_at = datetime.fromtimestamp(payload.ts, tz=UTC)
         # The time came from the device clock whatever meta.ts_src claims (G-8, B-4).
         ts_source = "device"
+
+    # Meta.lost defaults to 0 for older firmware; only a reported value is stored.
+    lost = payload.meta.lost if "lost" in payload.meta.model_fields_set else None
+    store_drop = payload.meta.store.drop if payload.meta.store is not None else None
 
     readings: list[Reading] = []
     for channel in payload.ch:
@@ -84,6 +90,8 @@ def normalize(payload: DataloggerV1, received_at: datetime) -> list[Reading]:
                 rssi=payload.meta.rssi,
                 seq=payload.seq,
                 boot=payload.meta.boot,
+                lost=lost,
+                store_drop=store_drop,
             )
         )
     return readings

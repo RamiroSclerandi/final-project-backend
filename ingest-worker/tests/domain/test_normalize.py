@@ -63,6 +63,26 @@ def test_a_non_zero_device_ts_is_tagged_device_even_when_meta_says_server() -> N
     )
 
 
+def test_readings_carry_the_reported_lost_counter_and_no_store_drop_without_store() -> None:
+    envelope = json.loads((FIXTURES / "datalogger_v1" / "meta_lost_nonzero.json").read_text())
+    payload = DataloggerV1.model_validate(envelope)
+
+    readings = normalize(payload, received_at=RECEIVED_AT)
+
+    assert [(reading.lost, reading.store_drop) for reading in readings] == [(3, None)]
+
+
+def test_firmware_without_lost_leaves_it_null_and_keeps_the_store_drop() -> None:
+    envelope = _load_fixture("no_aggregation.json")
+    envelope["meta"]["store"]["drop"] = 5
+    payload = DataloggerV1.model_validate(envelope)
+
+    readings = normalize(payload, received_at=RECEIVED_AT)
+
+    assert all(reading.lost is None for reading in readings)
+    assert all(reading.store_drop == 5 for reading in readings)
+
+
 def test_ts_zero_stamps_server_arrival_time_and_marks_ts_source_server() -> None:
     payload = DataloggerV1.model_validate(_load_fixture("ts_zero.json"))
 
