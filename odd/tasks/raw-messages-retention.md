@@ -38,14 +38,35 @@ A/B/C and the `seq_gaps.sql` extension.
 Route: direct inline (one migration, one rollback, one store method, their
 integration tests; all read already).
 
-- [ ] T1 Purge function, daily pg_cron job, rollback, integration tests.
-- [ ] T2 Unique archive key and worker upsert, integration test.
-- [ ] T3 README and audit document update.
+- [x] T1 Purge function, daily pg_cron job, rollback, integration tests.
+- [x] T2 Unique archive key and worker upsert, integration test.
+- [x] T3 README and audit document update.
 
 ## Progress and evidence
 
-(updated per task)
+| Task | Commit | Tests | Review assessment |
+|---|---|---|---|
+| T1 | `d563720` | 4 in `test_raw_messages_retention.py` (RED: 3 failed; the client-permission case passed vacuously before the function existed and was rechecked after GREEN), cron schedule expectation updated (RED then GREEN), cron rollback test added after the code (no RED) | medium, under budget |
+| T2 | `c837db6` | 2 in `test_supabase_store.py` (duplicate archive RED then GREEN; distinct-message guard passes by design), archive-key rollback test | see PR |
+| T3 | docs commit | READMEs: retention, idempotent archive, 41 integration tests | passive |
+
+Gate on `c837db6`: `uv run pytest -q` 150 passed; `uv run pytest -m integration -q`
+41 passed; `ruff check`, `ruff format --check`, `mypy src` clean.
+
+Notes:
+
+- The first rollback draft referenced `cron.job` in the same `IF` that checks
+  for pg_cron; PL/pgSQL plans the whole condition, so it failed on a server
+  without pg_cron. Fixed with a nested `IF`, caught by the rollback test.
+- The archive upsert merges on conflict. That only happens on an immediate
+  retry, while the row is still unprocessed, so the merge rewrites equal
+  values. A broker redelivery has a new arrival time and is a new row.
+- Rows double-encoded before PR #26 are older than 15 days, so the first purge
+  run removes them.
+- Before applying in Cloud: `raw_messages_archive_key` fails if duplicates
+  already exist. None are expected (archive retries only exist since PR #32,
+  which is not deployed yet).
 
 ## Next step
 
-T1.
+PR open; rest of B-7 (`lost`/`store.drop` options) pending a user decision.
