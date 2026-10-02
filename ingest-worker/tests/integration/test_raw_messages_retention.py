@@ -93,3 +93,20 @@ def test_rollback_removes_the_purge_and_reapplying_restores_it(
         apply_sql(_MIGRATION)
 
     assert query_scalar(function_count) == "1"
+
+
+_ARCHIVE_KEY = "20261002130000_raw_messages_archive_key.sql"
+
+
+def test_archive_key_rollback_drops_the_key_and_reapplying_restores_it(
+    apply_sql: Callable[[Path], None], query_scalar: Callable[[str], str]
+) -> None:
+    key_count = "SELECT count(*) FROM pg_constraint WHERE conname = 'raw_messages_archive_key'"
+
+    apply_sql(_SUPABASE_DIR / "rollbacks" / _ARCHIVE_KEY)
+    try:
+        assert query_scalar(key_count) == "0"
+    finally:
+        apply_sql(_SUPABASE_DIR / "migrations" / _ARCHIVE_KEY)
+
+    assert query_scalar(key_count) == "1"

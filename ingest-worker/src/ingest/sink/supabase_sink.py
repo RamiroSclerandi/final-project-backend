@@ -500,16 +500,19 @@ class SupabaseStore:
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
     ) -> int:
         with _classified_errors():
+            # A retry after a lost response hits raw_messages_archive_key and gets the
+            # existing row back; it is still unprocessed, so the merge rewrites equal values.
             rows = (
                 self._client.table("raw_messages")
-                .insert(
+                .upsert(
                     build_raw_message_row(
                         topic=topic,
                         payload=payload,
                         received_at=received_at,
                         error=error,
                         source=self._source,
-                    )
+                    ),
+                    on_conflict="topic,received_at,payload_md5",
                 )
                 .execute()
                 .data
