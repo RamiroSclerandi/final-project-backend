@@ -1,4 +1,4 @@
--- Persists the firmware loss counters with each measurement (handoff option A).
+-- Persists the firmware loss counters with each measurement.
 -- They are boot-scoped and monotonic: `lost` counts readings lost before
 -- emission (no seq gap), `store_drop` counts records dropped after emission
 -- (they open a seq gap). Until now they only lived in raw_messages.payload,

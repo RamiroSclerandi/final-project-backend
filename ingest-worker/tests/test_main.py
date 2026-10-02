@@ -1,7 +1,6 @@
-"""RED/GREEN tests for the writer loop (`Worker`) and graceful shutdown.
+"""Tests for the writer loop (`Worker`) and graceful shutdown.
 
-See sdd/worker-ingesta-mqtt/design's architecture diagram and Shutdown
-Sequence section. `_FakeSource`/`_FakeSinkStore`/`_FakeRegistryStore` are
+`_FakeSource`/`_FakeSinkStore`/`_FakeRegistryStore` are
 hand-written in-memory stand-ins, never a mock of paho-mqtt or supabase-py;
 `_FakeSinkStore`/`_FakeRegistryStore` mirror `tests/sink/test_supabase_sink.py`'s
 fakes, trimmed to what these tests need. Every test but one calls

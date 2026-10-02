@@ -3,8 +3,7 @@
 `MessageSource` is the protocol every message source implements (HiveMQ
 today; a future LoRaWAN/TTN transport is explicitly out of scope). The seam
 exists so the rest of the worker never imports paho-mqtt directly, and so
-the queueing/dropping/counting behavior is testable without a live broker
-(see design decisions D1-D3, sdd/worker-ingesta-mqtt/design).
+the queueing/dropping/counting behavior is testable without a live broker.
 """
 
 import queue
@@ -17,9 +16,9 @@ from typing import Protocol
 class InboundMessage:
     """One raw MQTT data envelope handed from the transport to the writer.
 
-    Carries the raw topic and payload bytes, not a parsed reading (design
-    decision D1). This keeps the network thread's callback O(1) and makes
-    the queue bound expressible in bytes:
+    Carries the raw topic and payload bytes, not a parsed reading. This keeps
+    the network thread's callback O(1) and makes the queue bound expressible
+    in bytes:
     `INGEST_QUEUE_MAX * MQTT_MAX_PAYLOAD_BYTES`.
     """
 
@@ -60,7 +59,7 @@ class MessageSource(Protocol):
 
         Blocks the calling thread for the lifetime of the connection; the
         composition root is expected to run this on the main thread so
-        Python delivers OS signals to it (design decision D5).
+        Python delivers OS signals to it.
         """
         ...
 

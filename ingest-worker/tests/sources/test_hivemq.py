@@ -1,9 +1,6 @@
-"""RED/GREEN tests for the HiveMQ paho-mqtt v2 source and its bounded queue.
+"""Tests for the HiveMQ paho-mqtt v2 source and its bounded queue.
 
-See design decisions D1 (raw envelope handoff), D2/D3 (queue bound and drop
-policy), D6 (subscribe inside `on_connect`), D7 (unique client id)
-(sdd/worker-ingesta-mqtt/design). paho-mqtt is a third party this project
-does not own: these tests never mock it. They construct real
+paho-mqtt is a third party this project does not own: these tests never mock it. They construct real
 `paho.mqtt.client.MQTTMessage`/`ConnectFlags`/`ReasonCode` objects and call
 the source's own callback methods directly, then assert on what ends up in
 its queues and counters — observable behavior, not "was a mock called".

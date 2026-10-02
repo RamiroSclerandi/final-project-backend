@@ -1,25 +1,21 @@
 """Idempotent measurement sink and its Supabase-backed persistence adapter.
 
-See docs/SDD_Worker_Ingesta.md sections 5.4-5.6 for quality banding, device
-status/metadata, and raw archival; design decisions D4 (batching), D9
-(retry), D11 (metrics transport) (sdd/worker-ingesta-mqtt/design); and the
-measured spike S1 result (sdd/worker-ingesta-mqtt/spike-s1-result).
+Covers quality banding, device status/metadata and raw archival.
 
-Deviation from SDD section 5.5, ratified: this sink batches across messages
-(flush at `BATCH_MAX_SIZE` rows or `BATCH_MAX_AGE_MS` since the first
-buffered row, whichever comes first — design decision D4) instead of one
-batch per message. A node emits 2 channels every 15s; per-message batching
+This sink batches across messages (flush at `BATCH_MAX_SIZE` rows or
+`BATCH_MAX_AGE_MS` since the first buffered row, whichever comes first)
+instead of one batch per message. A node emits 2 channels every 15s; per-message batching
 would mean a PostgREST round trip every 15s for no benefit, since
 `on_conflict="sensor_id,timestamp"` upsert idempotency is unchanged either
 way. Kept deliberately; do not "fix" this back to per-message batching.
 
-Spike S1 measured a batch upsert with `on_conflict="sensor_id,timestamp"`
-and `ignore_duplicates=True` as PARTIAL, not atomic: a conflicting row is
+A batch upsert with `on_conflict="sensor_id,timestamp"` and
+`ignore_duplicates=True` is PARTIAL, not atomic: a conflicting row is
 silently skipped, its batch siblings still land, and `response.data`
 contains only the rows actually written. That is why `upsert_measurements`
 returns a row count instead of raising on a partial write, why the sink
 compares rows submitted to rows written to count duplicates skipped (a free
-duplicate-rate metric), and why retry (D9) is per batch with no atomicity
+duplicate-rate metric), and why retry is per batch with no atomicity
 branch: whole-batch replay is idempotent under either outcome.
 """
 
@@ -51,9 +47,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Per-batch retry backoff (design decision D9): up to 3 retries beyond the
-# initial attempt, on timeout/5xx only. A 4xx is never retried — the request
-# itself is wrong and retrying will not fix it (Error Taxonomy table).
+# Per-batch retry backoff: up to 3 retries beyond the initial attempt, on
+# timeout/5xx only. A 4xx is never retried — the request itself is wrong and
+# retrying will not fix it.
 _RETRY_DELAYS_S = (0.5, 1.0, 2.0)
 
 # Internal tunable, not exposed as a config var — same precedent as
@@ -66,8 +62,7 @@ _DEVICE_TOUCH_MIN_INTERVAL_S = 60.0
 class SinkTransientError(Exception):
     """A batch write failed for a reason expected to succeed on retry.
 
-    Maps to a request timeout or a Supabase 5xx response (Error Taxonomy
-    table, design decision D9).
+    Maps to a request timeout or a Supabase 5xx response.
     """
 
 
@@ -169,7 +164,7 @@ class SinkStore(Protocol):
         """Upsert one batch into `measurements`.
 
         Returns:
-            The number of rows actually written (spike S1: a duplicate
+            The number of rows actually written (a duplicate
             inside the batch is silently skipped, not written and not an
             error — `len(rows) - returned` is the duplicate count).
 
@@ -191,7 +186,7 @@ class SinkStore(Protocol):
 
 
 def _band_quality(value: float, expected_min: float | None, expected_max: float | None) -> str:
-    """Classify a reading against its sensor type's accepted range (SDD 5.4).
+    """Classify a reading against its sensor type's accepted range.
 
     Never returns `"suspect"`: `measurements.quality`'s CHECK constraint
     allows that value, but no source document defines when a reading is
@@ -236,11 +231,10 @@ class MeasurementSink:
     """Writer-thread logic: archive, validate, band, batch, and upsert readings.
 
     Threading contract: confined to the single writer thread that owns the
-    pending batch and the Supabase client (see the architecture diagram in
-    sdd/worker-ingesta-mqtt/design). Composition (draining the transport's
-    queues on that thread, periodically calling `flush_if_due()`, and
-    shutdown draining) is the composition root's job (Phase 11, out of
-    scope here) — this class exposes the testable processing unit it drives.
+    pending batch and the Supabase client. Composition (draining the
+    transport's queues on that thread, periodically calling `flush_if_due()`,
+    and shutdown draining) is the composition root's job — this class exposes
+    the testable processing unit it drives.
     """
 
     def __init__(
@@ -276,8 +270,7 @@ class MeasurementSink:
         """Archive, validate, normalize, band, and buffer one data message.
 
         Every dequeued message is archived to `raw_messages` exactly once,
-        regardless of whether it parses (spec "Raw Message Archival",
-        CA-7): a malformed payload is archived with its `error` and
+        regardless of whether it parses: a malformed payload is archived with its `error` and
         processing moves on without stalling the queue.
         """
         error: str | None = None
@@ -317,7 +310,7 @@ class MeasurementSink:
         self.flush_if_due()
 
     def handle_status(self, status: DeviceStatus) -> None:
-        """Reflect a retained online/offline status update (CA-9).
+        """Reflect a retained online/offline status update.
 
         Never throttled: unlike `last_seen`/`firmware_version`, a status
         change is rare (one per connect/disconnect) and every one must be
@@ -327,7 +320,7 @@ class MeasurementSink:
         self._store.update_device_status(status.device_mac, status.online, status.received_at)
 
     def flush_if_due(self) -> None:
-        """Flush the pending batch if it has reached size or age (D4)."""
+        """Flush the pending batch if it has reached size or age."""
         if not self._pending:
             return
         assert self._pending_since is not None
@@ -379,7 +372,7 @@ class MeasurementSink:
         """Run a store or registry call, retrying a transient failure with the batch backoff.
 
         Registry resolution is select-then-insert-on-conflict, so a replay is
-        idempotent; a replayed archive at worst stores the same message twice (B-2).
+        idempotent; a replayed archive at worst stores the same message twice.
         """
         for delay in _RETRY_DELAYS_S:
             try:
@@ -572,7 +565,7 @@ def _classified_errors() -> Iterator[None]:
 
 
 def _classify_api_error(exc: APIError) -> SinkTransientError | SinkPermanentError:
-    """Classify a `postgrest.exceptions.APIError` per the Error Taxonomy table.
+    """Classify a `postgrest.exceptions.APIError` as transient or permanent.
 
     `APIError.code` is a Postgres SQLSTATE (e.g. `"53300"`, too-many-
     connections) when PostgREST returns a JSON error body, or the raw HTTP

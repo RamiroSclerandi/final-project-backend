@@ -1,10 +1,7 @@
 """Convert a validated `datalogger.v1` payload into canonical readings.
 
-See docs/SDD_Worker_Ingesta.md section 5.2 for the frozen `Reading` shape and
-section 5.3 for the resolution rules a `Reading` feeds into. A channel with
-`ok: false` produces no `Reading` here — the sink layer (Phase 8, out of
-scope for this module) archives the raw message independently of this
-conversion, per the "Failed Channel Produces No Row" requirement.
+A channel with `ok: false` produces no `Reading` here — the sink layer
+archives the raw message independently of this conversion.
 """
 
 from dataclasses import dataclass
@@ -17,10 +14,9 @@ from ingest.domain.payload import DataloggerV1
 class Reading:
     """One channel of one message: exactly one row of `measurements`.
 
-    The shape deviates from SDD section 5.2, which declares `value: float | None`
-    and a `valid: bool`. Both are vestiges of an earlier design in which a failed
-    channel still produced a row. The schema rules that out twice over:
-    `measurements.value` is NOT NULL, and there is no `valid` column at all.
+    `value` is a plain float and there is no `valid` flag, because a failed
+    channel never produces a row: `measurements.value` is NOT NULL and the
+    table has no `valid` column.
     """
 
     device_mac: str
@@ -58,7 +54,7 @@ def normalize(payload: DataloggerV1, received_at: datetime) -> list[Reading]:
         ts_source = "server"
     else:
         recorded_at = datetime.fromtimestamp(payload.ts, tz=UTC)
-        # The time came from the device clock whatever meta.ts_src claims (G-8, B-4).
+        # The time came from the device clock whatever meta.ts_src claims.
         ts_source = "device"
 
     # Meta.lost defaults to 0 for older firmware; only a reported value is stored.

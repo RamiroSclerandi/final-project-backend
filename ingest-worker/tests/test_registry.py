@@ -1,11 +1,8 @@
 """Behavioural tests for `Registry` against an in-memory fake store.
 
-See docs/SDD_Worker_Ingesta.md section 5.3 for the resolution algorithm and
-the spec requirement "Device and Sensor Auto-Registration" (CA-3, CA-4)
-(sdd/worker-ingesta-mqtt/spec). supabase-py is a third party this project
-does not own: `FakeRegistryStore` is a hand-written in-memory implementation
-of the narrow `RegistryStore` port `Registry` depends on, never a mock of
-supabase-py itself.
+supabase-py is a third party this project does not own: `FakeRegistryStore`
+is a hand-written in-memory implementation of the narrow `RegistryStore`
+port `Registry` depends on, never a mock of supabase-py itself.
 """
 
 from datetime import UTC, datetime

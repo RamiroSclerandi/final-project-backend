@@ -1,36 +1,27 @@
 """Composition root: builds the object graph and owns the writer loop.
 
-Two threads, one queue, per sdd/worker-ingesta-mqtt/design's architecture
-diagram: the paho network thread (blocking in `HiveMQSource.start()`,
-design decision D5 -- kept on the *main* thread specifically so Python
-delivers SIGTERM/SIGINT there) only enqueues; `Worker` below runs on a
-separate writer thread and owns every side effect. `MeasurementSink
-.handle_message` (Phase 8) already does the archive/validate/normalize/
-band/buffer/flush work; the piece deliberately left out until this phase is
-the loop that drains `HiveMQSource.inbound_queue`/`status_queue` and drives
-it -- plus wiring the `Metrics`/`SeqGapTracker` that `observability.py`
-(Phase 9) already defines but nothing calls yet.
+Two threads, one queue: the paho network thread (blocking in
+`HiveMQSource.start()`, kept on the *main* thread so Python delivers
+SIGTERM/SIGINT there) only enqueues; `Worker` below runs on a separate writer
+thread, drains `HiveMQSource.inbound_queue`/`status_queue`, drives
+`MeasurementSink` and feeds the `Metrics`/`SeqGapTracker` from
+`observability.py`.
 
-Each dequeued item is processed inside its own `try/except Exception`
-(design's Error Taxonomy table: "a failure discards that item only ... no
-payload can stall the queue" -- CA-7). `MeasurementSink.handle_message`
-already isolates a malformed JSON payload internally (it archives the error
-and returns without raising); the broader catch here additionally isolates
-the rarer case of an unexpected failure past that point (for example, a
-registry resolution error or a store failure), which `MeasurementSink` does
-not catch on its own.
+Each dequeued item is processed inside its own `try/except Exception`: a
+failure discards that item only, so no payload can stall the queue.
+`MeasurementSink.handle_message` already isolates a malformed JSON payload
+internally (it archives the error and returns without raising); the broader
+catch here additionally isolates unexpected failures past that point, such as
+a registry resolution error or a store failure.
 
-`Metrics.measurements_rows_submitted_total`/`_written_total` (defined by
-Phase 9, unwired since then -- see sdd/worker-ingesta-mqtt/apply-progress's
-slice 6 notes) are wired here purely from `MeasurementSink`'s existing
-PUBLIC counters (`pending_count`, `batches_written_count`,
-`batch_failed_count`, `duplicates_skipped_count`) plus the reading count
-derived from the payload this loop already parses for
-`channels_failed_total`/`SeqGapTracker`. No change to `sink/supabase_sink.py`
-was needed or made.
+`Metrics.measurements_rows_submitted_total`/`_written_total` are derived from
+`MeasurementSink`'s public counters (`pending_count`, `batches_written_count`,
+`batch_failed_count`, `duplicates_skipped_count`) plus the reading count taken
+from the payload this loop already parses for `channels_failed_total` and
+`SeqGapTracker`.
 
 Shutdown sequence (SIGTERM/SIGINT, budget `_SHUTDOWN_GRACE_S=8s` inside
-Docker's 10s Linux grace period -- design's Shutdown Sequence section):
+Docker's 10s Linux grace period):
 1. The signal handler (main thread) calls `HiveMQSource.stop()`
    (`client.disconnect()`), which makes the blocking `start()` call on the
    main thread return, and `Worker.request_shutdown()`, which records the
@@ -41,13 +32,9 @@ Docker's 10s Linux grace period -- design's Shutdown Sequence section):
    below `BATCH_MAX_SIZE`) and reports `shutdown_flushed_rows_total`/
    `shutdown_undrained_total`.
 
-Deviation from the design's literal step 2 ("on_message additionally checks
-shutdown_event and drops"): `sources/hivemq.py` is unmodified this slice --
+`sources/hivemq.py` does not drop messages once shutdown starts:
 `client.disconnect()` already stops the broker from delivering further
-messages for all practical purposes, and the brief window between calling
-`disconnect()` and the socket actually closing was judged not worth
-touching a file outside this phase's scope (main.py, Dockerfile, README,
-docs only). Flagged for `sdd-verify`.
+messages for practical purposes.
 """
 
 import logging
@@ -144,7 +131,7 @@ class Worker:
         """Drain both queues until told to stop, then force-flush and return.
 
         An unexpected error escaping the loop sets `has_crashed` instead of
-        killing the thread silently, so the caller can stop the process (B-1).
+        killing the thread silently, so the caller can stop the process.
         """
         log_event("writer_loop_started")
         try:
@@ -201,8 +188,8 @@ class Worker:
             self._track_and_flush(lambda: self._sink.handle_message(message), added=added)
         except Exception as exc:
             # Isolates a failure past `handle_message`'s own JSON-validation
-            # guard (e.g. a registry resolution error) -- design's Error
-            # Taxonomy table: one item's failure never stalls the queue.
+            # guard (e.g. a registry resolution error); one item's failure never
+            # stalls the queue.
             log_event(
                 "writer_loop_message_failed",
                 level=logging.ERROR,
@@ -309,12 +296,12 @@ class Drainable(Protocol):
 
 
 def run_until_stopped(source: BlockingSource, worker: Drainable, join_timeout_s: float) -> None:
-    """Run the writer thread while `source.start()` blocks the caller (D5).
+    """Run the writer thread while `source.start()` blocks the caller.
 
     The writer is released even when `start()` raises (e.g. broker unreachable), and it
     is a daemon, so a writer still stuck after `join_timeout_s` cannot keep the process
-    alive (X-4). A crashed writer stops the source, so the process does not keep
-    consuming with nobody persisting (B-1).
+    alive. A crashed writer stops the source, so the process does not keep
+    consuming with nobody persisting.
 
     Raises:
         SystemExit: With code 1 when the writer crashed, so a restart policy sees it.
@@ -346,8 +333,7 @@ def _load_settings() -> Settings:
 
     Raises:
         SystemExit: If a required variable is missing, blank, or invalid.
-            The field name is logged; its value never is (Error Taxonomy:
-            "Missing/blank secret ... Fatal at startup").
+            The field name is logged; its value never is.
     """
     try:
         # pydantic-settings sources required fields from the environment at

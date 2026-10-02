@@ -22,7 +22,6 @@ ESP32 nodes ──MQTT/TLS──> HiveMQ Cloud ──> ingest-worker ──> Sup
 | `supabase/seed.sql` | Reference data (sensor types and their expected ranges). |
 | `supabase/functions/set-sampling-interval/` | Edge Function the dashboard calls to change a node's sampling interval; it stores the configuration and publishes it to the node over MQTT. |
 | `supabase/manual/` | Checks that need the full local Supabase stack. See [supabase/README.md](supabase/README.md). |
-| `docs/` | Technical documentation: the worker's behavioral specification and firmware notes. |
 
 ## Data flow
 

@@ -1,13 +1,11 @@
-"""RED/GREEN tests for the idempotent measurement sink (writer thread).
+"""Tests for the idempotent measurement sink (writer thread).
 
-See docs/SDD_Worker_Ingesta.md sections 5.4-5.6 and design decisions D4, D9,
-D11 (sdd/worker-ingesta-mqtt/design), and the measured spike S1 result
-(sdd/worker-ingesta-mqtt/spike-s1-result): a batch upsert with
-on_conflict="sensor_id,timestamp" and ignore_duplicates=True is PARTIAL, not
-atomic, and `response.data` holds only the rows actually written. supabase-py
-is a third party this project does not own: `FakeSinkStore` and
-`FakeRegistryStore` are hand-written in-memory implementations of the
-`SinkStore`/`RegistryStore` ports, never a mock of supabase-py itself.
+A batch upsert with on_conflict="sensor_id,timestamp" and
+ignore_duplicates=True is PARTIAL, not atomic, and `response.data` holds only
+the rows actually written. supabase-py is a third party this project does
+not own: `FakeSinkStore` and `FakeRegistryStore` are hand-written in-memory
+implementations of the `SinkStore`/`RegistryStore` ports, never a mock of
+supabase-py itself.
 `FakeRegistryStore` mirrors `tests/test_registry.py`'s fake of the same
 protocol, trimmed to what these tests need — the insert-race recovery path
 is already covered there.
@@ -127,8 +125,7 @@ class FakeRegistryStore:
 class FakeSinkStore:
     """In-memory `SinkStore`.
 
-    `upsert_measurements` simulates the real PostgREST semantics measured in
-    spike S1 (sdd/worker-ingesta-mqtt/spike-s1-result): a row already
+    `upsert_measurements` simulates the real PostgREST semantics: a row already
     present for its `(sensor_id, timestamp)` conflict target is silently
     skipped, its batch siblings are written, and only the actually-written
     row count is returned — never raises on a duplicate. `errors_to_raise`

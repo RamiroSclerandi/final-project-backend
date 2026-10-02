@@ -1,9 +1,7 @@
 """Access control on `v_latest_readings`, `mv_measurements_hourly`, and
 `mv_measurements_daily` against a real, ephemeral Postgres + PostgREST pair.
 
-Regression guard for two confirmed defects (see
-sdd/frontend-dashboard/delivery-and-remediation, proyecto-final/matview-anon-leak,
-and proyecto-final/view-security-invoker-leak): all three relations granted
+Regression guard for two defects: all three relations granted
 `anon` SELECT by default -- materialized views cannot carry row level
 security at all, so the GRANT/REVOKE pair is their entire access-control
 surface -- and `v_latest_readings` additionally ran with its owner's

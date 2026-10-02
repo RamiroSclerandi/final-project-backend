@@ -1,4 +1,4 @@
-"""Read access by role on `devices`, `sensors` and `measurements` (ported from the frontend).
+"""Read access by role on `devices`, `sensors` and `measurements`.
 
 `authenticated` reads all three; `anon` reads none of them, and no user role
 can insert a measurement: only the worker's `service_role` writes. Each test
