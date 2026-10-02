@@ -127,6 +127,7 @@ class Worker:
         self._deadline: float | None = None
         self.shutdown_flushed_rows_total = 0
         self.shutdown_undrained_total = 0
+        self.has_crashed = False
 
     def request_shutdown(self) -> None:
         """Stop draining once the queues are empty or the grace period elapses.
@@ -140,12 +141,21 @@ class Worker:
         self._shutdown_event.set()
 
     def run(self) -> None:
-        """Drain both queues until told to stop, then force-flush and return."""
+        """Drain both queues until told to stop, then force-flush and return.
+
+        An unexpected error escaping the loop sets `has_crashed` instead of
+        killing the thread silently, so the caller can stop the process (B-1).
+        """
         log_event("writer_loop_started")
-        while not self._shutdown_deadline_passed():
-            drained = self._drain_once()
-            if self._shutdown_event.is_set() and not drained:
-                break
+        try:
+            while not self._shutdown_deadline_passed():
+                drained = self._drain_once()
+                if self._shutdown_event.is_set() and not drained:
+                    break
+        except Exception as exc:
+            self.has_crashed = True
+            log_event("writer_loop_crashed", level=logging.ERROR, error=str(exc))
+            self.request_shutdown()
         self._finish()
 
     def _shutdown_deadline_passed(self) -> bool:
@@ -168,7 +178,10 @@ class Worker:
             # Idle: still check the age-based threshold so a partial batch
             # never sits past BATCH_MAX_AGE_MS just because no new message
             # arrived to trigger `handle_message`'s own `flush_if_due` call.
-            self._track_and_flush(self._sink.flush_if_due)
+            try:
+                self._track_and_flush(self._sink.flush_if_due)
+            except Exception as exc:
+                log_event("writer_loop_flush_failed", level=logging.ERROR, error=str(exc))
 
         try:
             status = self._source.status_queue.get_nowait()
@@ -285,9 +298,12 @@ class Worker:
 
 class BlockingSource(Protocol):
     def start(self) -> None: ...
+    def stop(self) -> None: ...
 
 
 class Drainable(Protocol):
+    @property
+    def has_crashed(self) -> bool: ...
     def run(self) -> None: ...
     def request_shutdown(self) -> None: ...
 
@@ -297,15 +313,27 @@ def run_until_stopped(source: BlockingSource, worker: Drainable, join_timeout_s:
 
     The writer is released even when `start()` raises (e.g. broker unreachable), and it
     is a daemon, so a writer still stuck after `join_timeout_s` cannot keep the process
-    alive (X-4).
+    alive (X-4). A crashed writer stops the source, so the process does not keep
+    consuming with nobody persisting (B-1).
+
+    Raises:
+        SystemExit: With code 1 when the writer crashed, so a restart policy sees it.
     """
-    writer_thread = threading.Thread(target=worker.run, name="ingest-writer", daemon=True)
+
+    def _run_writer() -> None:
+        worker.run()
+        if worker.has_crashed:
+            source.stop()
+
+    writer_thread = threading.Thread(target=_run_writer, name="ingest-writer", daemon=True)
     writer_thread.start()
     try:
         source.start()
     finally:
         worker.request_shutdown()
         writer_thread.join(timeout=join_timeout_s)
+    if worker.has_crashed:
+        raise SystemExit(1)
 
 
 def build_supabase_client(url: str, key: str) -> Client:
