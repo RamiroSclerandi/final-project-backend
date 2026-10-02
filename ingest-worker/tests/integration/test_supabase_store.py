@@ -123,6 +123,38 @@ def test_archiving_an_unparseable_message_writes_its_error_and_leaves_it_unproce
     assert rows[0]["error"] == "boom"
 
 
+def test_archiving_the_same_message_twice_keeps_one_row_and_returns_its_id(
+    store: SupabaseStore, service_role_client: Client, unique_mac: str
+) -> None:
+    # A retry after a lost response replays the exact same topic, payload and arrival time.
+    topic = f"dl/v1/{unique_mac}/data"
+    received_at = datetime(2026, 9, 10, 12, 0, 0, 123456, tzinfo=UTC)
+
+    first_id = store.archive_raw_message(
+        topic=topic, payload=b'{"v": 1}', received_at=received_at, error=None
+    )
+    second_id = store.archive_raw_message(
+        topic=topic, payload=b'{"v": 1}', received_at=received_at, error=None
+    )
+
+    rows = service_role_client.table("raw_messages").select("id").eq("topic", topic).execute().data
+    assert second_id == first_id
+    assert rows == [{"id": first_id}]
+
+
+def test_a_different_message_at_the_same_instant_is_archived_separately(
+    store: SupabaseStore, service_role_client: Client, unique_mac: str
+) -> None:
+    topic = f"dl/v1/{unique_mac}/data"
+    received_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+
+    store.archive_raw_message(topic=topic, payload=b'{"v": 1}', received_at=received_at, error=None)
+    store.archive_raw_message(topic=topic, payload=b'{"v": 2}', received_at=received_at, error=None)
+
+    rows = service_role_client.table("raw_messages").select("id").eq("topic", topic).execute().data
+    assert len(rows) == 2
+
+
 def test_registering_a_device_and_a_sensor_round_trips_through_insert_and_reselect(
     store: SupabaseStore, unique_mac: str
 ) -> None:

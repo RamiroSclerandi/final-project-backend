@@ -18,7 +18,9 @@ Two threads share two bounded queues:
 - The **writer thread** (`Worker` in `src/ingest/main.py`) drains the queues
   and owns every side effect, through `MeasurementSink`
   (`src/ingest/sink/supabase_sink.py`):
-  1. archives the raw message in `raw_messages`;
+  1. archives the raw message in `raw_messages` (idempotent: a retried
+     archive returns the existing row; a daily job purges processed rows after
+     7 days and the rest after 15);
   2. validates it against the `datalogger.v1` model (`src/ingest/domain/`);
   3. resolves each reading to its sensor, registering unseen devices, sensor
      types and sensors (`src/ingest/registry.py`, cached with a TTL);
@@ -81,7 +83,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync
 uv run pytest -q          # 150 unit tests, no live broker or database required
-uv run pytest -m integration -q   # 32 integration tests, needs a container runtime
+uv run pytest -m integration -q   # 41 integration tests, needs a container runtime
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src

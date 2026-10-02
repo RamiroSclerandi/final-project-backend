@@ -17,7 +17,7 @@ ESP32 nodes ──MQTT/TLS──> HiveMQ Cloud ──> ingest-worker ──> Sup
 | Path | Contents |
 |---|---|
 | `ingest-worker/` | Python service that subscribes to the broker, validates and normalizes each `datalogger.v1` message, and writes it to Supabase. See its [README](ingest-worker/README.md). |
-| `supabase/migrations/` | Database schema: devices, sensors, sensor types, measurements, raw message archive, device configuration, hourly and daily aggregate views, Row Level Security policies and the `pg_cron` refresh jobs. |
+| `supabase/migrations/` | Database schema: devices, sensors, sensor types, measurements, raw message archive, device configuration, hourly and daily aggregate views, Row Level Security policies, and the `pg_cron` jobs that refresh the aggregates and purge old raw messages. |
 | `supabase/rollbacks/` | Rollback scripts for migrations that need one. |
 | `supabase/seed.sql` | Reference data (sensor types and their expected ranges). |
 | `supabase/functions/set-sampling-interval/` | Edge Function the dashboard calls to change a node's sampling interval; it stores the configuration and publishes it to the node over MQTT. |
@@ -28,8 +28,9 @@ ESP32 nodes ──MQTT/TLS──> HiveMQ Cloud ──> ingest-worker ──> Sup
 
 1. A node publishes a JSON envelope to `dl/v1/<MAC>/data` and its online state
    to `dl/v1/<MAC>/status`.
-2. The worker archives every message in `raw_messages`, validates it, and
-   registers unseen devices and sensors automatically.
+2. The worker archives every message in `raw_messages` (processed rows are
+   kept 7 days, failed ones 15), validates it, and registers unseen devices
+   and sensors automatically.
 3. Each valid reading becomes one row in `measurements`. Writes are idempotent
    on `(sensor_id, timestamp)`, so a resent message never duplicates data.
 4. `pg_cron` refreshes the hourly and daily aggregate views; the dashboard
