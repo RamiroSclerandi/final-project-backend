@@ -12,3 +12,9 @@ def test_public_signup_is_disabled() -> None:
     config = tomllib.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
 
     assert config["auth"]["enable_signup"] is False
+
+
+def test_sampling_interval_function_requires_a_verified_jwt() -> None:
+    config = tomllib.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+
+    assert config["functions"]["set-sampling-interval"]["verify_jwt"] is True
