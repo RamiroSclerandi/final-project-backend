@@ -5,9 +5,6 @@ MQTT-to-Supabase ingestion worker. Subscribes to `dl/v1/+/data` and
 `datalogger.v1` payloads, auto-registers devices/sensors on first sight, and
 persists measurements idempotently to Supabase.
 
-The full behavioral specification is `docs/SDD_Worker_Ingesta.md` at the
-repository root.
-
 ## How it works
 
 Two threads share two bounded queues:
@@ -80,7 +77,7 @@ broker disconnect one of them (MQTT-3.1.4-2).
 
 `MQTT_CA_CERT_PATH` can stay empty: the default certifi CA bundle validates
 the HiveMQ Cloud broker's certificate chain (Let's Encrypt) without any
-custom CA (verification notes in `docs/spikes/s2-hivemq-tls.md`).
+custom CA.
 
 ## Running locally
 
@@ -153,9 +150,8 @@ docker logs -f ingest-worker
 
 ## Manual end-to-end verification
 
-Some acceptance criteria of the specification (CA-1 to CA-9) need the real
-broker and a real Supabase project, so they are checked by hand rather than
-in the automated tests: delivery while connected, batch idempotency,
+Some behaviors need the real broker and a real Supabase project, so they are
+checked by hand rather than in the automated tests: delivery while connected, batch idempotency,
 auto-registration, `ts:0` clock handling, resilience to corrupt payloads, the
 `(boot, seq)` gap after an outage (`docs/queries/seq_gaps.sql`), and that the
 worker's credential is subscribe-only.
