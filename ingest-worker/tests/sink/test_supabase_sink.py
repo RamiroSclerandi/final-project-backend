@@ -321,6 +321,18 @@ def test_device_status_from_the_status_topic_is_never_throttled() -> None:
     assert store.device_status["AABBCCDDEEFF"] is False
 
 
+def test_a_written_row_carries_the_firmware_loss_counters() -> None:
+    envelope = json.loads(_data_envelope())
+    envelope["meta"]["lost"] = 2
+    envelope["meta"]["store"]["drop"] = 4
+    sink, store = _make_sink(batch_max_size=1)
+
+    sink.handle_message(_inbound(json.dumps(envelope).encode()))
+
+    [row] = store.measurements.values()
+    assert (row["lost"], row["store_drop"]) == (2, 4)
+
+
 def test_a_transient_batch_failure_is_retried_and_succeeds() -> None:
     clock = FakeClock()
     store = FakeSinkStore()

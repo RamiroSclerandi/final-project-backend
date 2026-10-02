@@ -33,6 +33,12 @@ A message with `ts: 0` (device clock not yet synchronized) is stamped with the
 arrival time and tagged `ts_source = 'server'`; any other timestamp comes from
 the device and is tagged `device`.
 
+Each row also stores the firmware's loss counters for its boot: `lost`
+(readings lost before emission) and `store_drop` (records dropped from the
+device buffer), or NULL when the firmware does not report them.
+`docs/queries/loss_attribution.sql` uses them to split each boot's `seq` gaps
+into buffer drops and transport or broker loss.
+
 Failure handling:
 
 - A malformed or inconsistent message is archived with its error and skipped;
@@ -82,8 +88,8 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-uv run pytest -q          # 150 unit tests, no live broker or database required
-uv run pytest -m integration -q   # 41 integration tests, needs a container runtime
+uv run pytest -q          # 154 unit tests, no live broker or database required
+uv run pytest -m integration -q   # 48 integration tests, needs a container runtime
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src

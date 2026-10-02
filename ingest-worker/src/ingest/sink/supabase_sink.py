@@ -227,6 +227,8 @@ def _to_measurement_row(reading: Reading, sensor_id: str, quality: str) -> dict[
         "value_min": reading.value_min,
         "value_max": reading.value_max,
         "sample_count": reading.sample_count,
+        "lost": reading.lost,
+        "store_drop": reading.store_drop,
     }
 
 
