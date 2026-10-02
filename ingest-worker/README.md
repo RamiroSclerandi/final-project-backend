@@ -88,8 +88,8 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-uv run pytest -q          # 150 unit tests, no live broker or database required
-uv run pytest -m integration -q   # 47 integration tests, needs a container runtime
+uv run pytest -q          # 154 unit tests, no live broker or database required
+uv run pytest -m integration -q   # 48 integration tests, needs a container runtime
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src

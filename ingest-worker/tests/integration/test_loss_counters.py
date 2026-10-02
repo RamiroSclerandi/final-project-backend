@@ -175,3 +175,16 @@ def test_loss_attribution_leaves_unreported_counters_unknown(
     result = _attribution(store, service_role_client, query_scalar, unique_mac, messages)
 
     assert result == "2|null|null|null"
+
+
+def test_loss_attribution_leaves_a_partially_reported_boot_unknown(
+    store: SupabaseStore,
+    service_role_client: Client,
+    query_scalar: Callable[[str], str],
+    unique_mac: str,
+) -> None:
+    messages: list[_Counters] = [(1, None, None), (2, None, None), (5, 2, 1)]
+
+    result = _attribution(store, service_role_client, query_scalar, unique_mac, messages)
+
+    assert result == "2|null|null|null"

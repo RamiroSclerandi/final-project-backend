@@ -72,6 +72,16 @@ def test_readings_carry_the_reported_lost_counter_and_no_store_drop_without_stor
     assert [(reading.lost, reading.store_drop) for reading in readings] == [(3, None)]
 
 
+def test_an_explicit_zero_lost_is_stored_as_zero() -> None:
+    envelope = json.loads((FIXTURES / "datalogger_v1" / "meta_lost_zero.json").read_text())
+    payload = DataloggerV1.model_validate(envelope)
+
+    readings = normalize(payload, received_at=RECEIVED_AT)
+
+    assert readings != []
+    assert all(reading.lost == 0 for reading in readings)
+
+
 def test_firmware_without_lost_leaves_it_null_and_keeps_the_store_drop() -> None:
     envelope = _load_fixture("no_aggregation.json")
     envelope["meta"]["store"]["drop"] = 5

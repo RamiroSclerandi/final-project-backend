@@ -8,8 +8,9 @@
 -- `lost` counts readings lost before emission (they never got a seq, so they
 -- open no gap); `store_drop` counts records dropped from the buffer after
 -- emission (they do open a gap). A NULL delta means the firmware did not report
--- that counter, so true_transport_loss is unknown (NULL) rather than the whole
--- gap. Only boots with at least one seq gap are listed.
+-- that counter for the whole boot (including a boot stored partly before the
+-- columns existed), so true_transport_loss is unknown (NULL) rather than the
+-- whole gap. Only boots with at least one seq gap are listed.
 
 WITH distinct_readings AS (
     SELECT DISTINCT d.mac_address, m.boot, m.seq, m.lost, m.store_drop
@@ -32,8 +33,10 @@ gaps_per_boot AS (
 ),
 counter_deltas AS (
     SELECT mac_address, boot,
-           MAX(store_drop) - MIN(store_drop) AS delta_store_drop,
-           MAX(lost) - MIN(lost) AS delta_lost
+           CASE WHEN bool_and(store_drop IS NOT NULL)
+                THEN MAX(store_drop) - MIN(store_drop) END AS delta_store_drop,
+           CASE WHEN bool_and(lost IS NOT NULL)
+                THEN MAX(lost) - MIN(lost) END AS delta_lost
     FROM distinct_readings
     GROUP BY mac_address, boot
 )
