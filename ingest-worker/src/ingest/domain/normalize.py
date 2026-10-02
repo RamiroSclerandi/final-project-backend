@@ -56,7 +56,8 @@ def normalize(payload: DataloggerV1, received_at: datetime) -> list[Reading]:
         ts_source = "server"
     else:
         recorded_at = datetime.fromtimestamp(payload.ts, tz=UTC)
-        ts_source = payload.meta.ts_src
+        # The time came from the device clock whatever meta.ts_src claims (G-8, B-4).
+        ts_source = "device"
 
     readings: list[Reading] = []
     for channel in payload.ch:
