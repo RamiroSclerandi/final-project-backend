@@ -48,10 +48,11 @@ tests).
 | T1 | `0fad007` | 3 in `test_loss_counters.py` (round trip, non-negative check, rollback), RED (`PGRST204`, missing rollback file) then GREEN |
 | T2 | `e4693d1` | 2 in `test_normalize.py`, 1 in `test_supabase_sink.py`, RED then GREEN |
 | T3 | `1a9f00e` | 1 in `test_loss_counters.py`: two channels, seq 1, 2, 5 with one buffer drop gives gap 2, store_drop 1, transport loss 1, lost 2; RED (missing file) then GREEN |
-| T4 | docs commit | Worker README: loss counters and query, 45 integration tests |
+| T4 | docs commit | Worker README: loss counters and query |
+| Review fix | `84a5f0e` | Unreported counters keep `delta_store_drop` and `true_transport_loss` NULL (RED then GREEN); negative `lost` case (passed immediately); unique MAC in attribution tests |
 
-Gate: `uv run pytest -q` 153 passed; `uv run pytest -m integration -q` 45
-passed; `ruff check`, `ruff format --check`, `mypy src` clean.
+Gate on `84a5f0e`: `uv run pytest -q` 153 passed; `uv run pytest -m integration -q` 47
+passed; CI green; `ruff check`, `ruff format --check`, `mypy src` clean.
 
 Notes:
 
@@ -61,6 +62,12 @@ Notes:
   `delta_lost`.
 - Frontend: if its type-drift CI job regenerates types from the schema, it
   will see the two new nullable columns.
+- Second review, dispositions: shared-schema rollback test kept (the suite runs
+  sequentially, same pattern as earlier rollback tests); `store_drop` NULL
+  semantics refuted (`Store.drop` has no default, so a store without `drop`
+  fails validation); negative `true_transport_loss` is possible when buffer
+  drops precede the first received seq of a boot, left visible rather than
+  clamped.
 
 ## Next step
 
