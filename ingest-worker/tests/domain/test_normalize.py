@@ -50,6 +50,19 @@ def test_device_timestamped_reading_uses_device_clock_and_ts_source() -> None:
     assert readings[0].recorded_at == datetime.fromtimestamp(1788804294, tz=UTC)
 
 
+def test_a_non_zero_device_ts_is_tagged_device_even_when_meta_says_server() -> None:
+    envelope = _load_fixture("no_aggregation.json")
+    envelope["meta"]["ts_src"] = "server"
+    payload = DataloggerV1.model_validate(envelope)
+
+    readings = normalize(payload, received_at=RECEIVED_AT)
+
+    assert all(reading.ts_source == "device" for reading in readings)
+    assert all(
+        reading.recorded_at == datetime.fromtimestamp(1788804294, tz=UTC) for reading in readings
+    )
+
+
 def test_ts_zero_stamps_server_arrival_time_and_marks_ts_source_server() -> None:
     payload = DataloggerV1.model_validate(_load_fixture("ts_zero.json"))
 
