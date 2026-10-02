@@ -105,3 +105,48 @@ def test_rollback_drops_the_loss_counters_and_reapplying_restores_them(
         _wait_for_postgrest_to_see_loss_counters(service_role_client)
 
     assert query_scalar(columns) == "2"
+
+
+_ATTRIBUTION_QUERY = (
+    Path(__file__).resolve().parents[2] / "docs" / "queries" / "loss_attribution.sql"
+)
+_ATTRIBUTION_MAC = "10550A770001"
+
+
+def test_loss_attribution_splits_a_seq_gap_into_buffer_drops_and_transport_loss(
+    store: SupabaseStore,
+    service_role_client: Client,
+    query_scalar: Callable[[str], str],
+) -> None:
+    temperature = _sensor_id(store, _ATTRIBUTION_MAC)
+    pressure_type = store.select_sensor_type("pressure", "hPa")
+    assert pressure_type is not None
+    device = store.select_device_by_mac(_ATTRIBUTION_MAC)
+    assert device is not None
+    pressure = store.insert_sensor(device.id, pressure_type.id, "bmp280", "")
+    assert pressure is not None
+    # Boot 1 sends seq 1, 2 and 5: seq 3 and 4 are missing, and the buffer
+    # reports one drop between seq 2 and 5, so one message died in transport.
+    rows = [
+        {
+            "sensor_id": sensor_id,
+            "value": 1.0,
+            "timestamp": datetime(2026, 10, 2, 12, seq, tzinfo=UTC).isoformat(),
+            "seq": seq,
+            "boot": 1,
+            "lost": lost,
+            "store_drop": store_drop,
+        }
+        for sensor_id in (temperature, pressure.id)
+        for seq, lost, store_drop in ((1, 0, 0), (2, 1, 0), (5, 2, 1))
+    ]
+    service_role_client.table("measurements").insert(rows).execute()
+    attribution_sql = _ATTRIBUTION_QUERY.read_text().strip().rstrip(";")
+
+    result = query_scalar(
+        "SELECT total_seq_gap || '|' || delta_store_drop || '|' || true_transport_loss"
+        f" || '|' || delta_lost FROM ({attribution_sql}) attribution"
+        f" WHERE mac_address = '{_ATTRIBUTION_MAC}'"
+    )
+
+    assert result == "2|1|1|2"
