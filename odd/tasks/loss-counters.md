@@ -35,16 +35,33 @@ handoff §3.2). Out: options B and C, frontend changes.
 Route: direct inline (one migration, one domain change, one query file, their
 tests).
 
-- [ ] T1 Migration adding `lost` and `store_drop` to `measurements`, rollback,
+- [x] T1 Migration adding `lost` and `store_drop` to `measurements`, rollback,
       integration test.
-- [ ] T2 Worker writes both counters (`Reading`, `normalize`, measurement row).
-- [ ] T3 Loss-attribution query and its integration test.
-- [ ] T4 README, feature document and audit update.
+- [x] T2 Worker writes both counters (`Reading`, `normalize`, measurement row).
+- [x] T3 Loss-attribution query and its integration test.
+- [x] T4 README, feature document and audit update.
 
 ## Progress and evidence
 
-(updated per task)
+| Task | Commit | Tests |
+|---|---|---|
+| T1 | `0fad007` | 3 in `test_loss_counters.py` (round trip, non-negative check, rollback), RED (`PGRST204`, missing rollback file) then GREEN |
+| T2 | `e4693d1` | 2 in `test_normalize.py`, 1 in `test_supabase_sink.py`, RED then GREEN |
+| T3 | `1a9f00e` | 1 in `test_loss_counters.py`: two channels, seq 1, 2, 5 with one buffer drop gives gap 2, store_drop 1, transport loss 1, lost 2; RED (missing file) then GREEN |
+| T4 | docs commit | Worker README: loss counters and query, 45 integration tests |
+
+Gate: `uv run pytest -q` 153 passed; `uv run pytest -m integration -q` 45
+passed; `ruff check`, `ruff format --check`, `mypy src` clean.
+
+Notes:
+
+- `Meta.lost` defaults to 0 so firmware 1.1.0 still validates; `normalize`
+  checks `model_fields_set` and stores NULL when the field was not sent.
+- `loss_attribution.sql` follows the handoff sketch (§3.2) and adds
+  `delta_lost`.
+- Frontend: if its type-drift CI job regenerates types from the schema, it
+  will see the two new nullable columns.
 
 ## Next step
 
-T1.
+PR open. B-7 is complete once it merges.
