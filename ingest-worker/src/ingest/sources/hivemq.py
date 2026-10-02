@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 _RECONNECT_MIN_DELAY_S = 1
 _RECONNECT_MAX_DELAY_S = 60
 
+# CONNACK reasons no reconnect can fix: retrying them forever hides a bad
+# credential behind an apparently healthy process (B-3).
+_AUTH_FAILURE_REASONS = frozenset({"Bad user name or password", "Not authorized"})
+
+
+class MqttAuthenticationError(RuntimeError):
+    """The broker rejected the worker's credentials; fix MQTT_USER/MQTT_PASSWORD."""
+
 
 def _parse_online_offline(payload: bytes) -> bool:
     """Parse a retained status payload into an online flag.
@@ -69,6 +77,7 @@ class HiveMQSource:
         self._counts_lock = threading.Lock()
         self._dropped_count = 0
         self._oversized_count = 0
+        self._auth_failure: str | None = None
 
         self._client: mqtt.Client = mqtt.Client(
             callback_api_version=CallbackAPIVersion.VERSION2,
@@ -88,9 +97,18 @@ class HiveMQSource:
         self._client.on_subscribe = self._on_subscribe
 
     def start(self) -> None:
-        """Connect to the broker and block, delivering messages until `stop()`."""
+        """Connect to the broker and block, delivering messages until `stop()`.
+
+        Raises:
+            MqttAuthenticationError: If the broker rejected the credentials.
+        """
         self._client.connect(self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60)
         self._client.loop_forever()
+        if self._auth_failure is not None:
+            raise MqttAuthenticationError(
+                f"MQTT broker rejected the credentials: {self._auth_failure}; "
+                "check MQTT_USER and MQTT_PASSWORD"
+            )
 
     def stop(self) -> None:
         """Disconnect, which makes the blocked `loop_forever()` in `start()` return."""
@@ -128,6 +146,9 @@ class HiveMQSource:
     ) -> None:
         if reason_code.is_failure:
             logger.error("MQTT connect failed: reason=%s", reason_code)
+            if str(reason_code) in _AUTH_FAILURE_REASONS:
+                self._auth_failure = str(reason_code)
+                client.disconnect()
             return
         # Subscriptions are issued here every time on_connect fires —
         # including after an automatic reconnect — never once at startup.

@@ -20,11 +20,13 @@ from uuid import uuid4
 
 import pytest
 
+from ingest.main import build_supabase_client
 from ingest.registry import DeviceRecord, Registry, SensorRecord, SensorTypeRecord
 from ingest.sink.supabase_sink import (
     MeasurementSink,
     SinkPermanentError,
     SinkTransientError,
+    SupabaseStore,
     build_raw_message_row,
     record_from_row,
 )
@@ -145,12 +147,16 @@ class FakeSinkStore:
         self.measurements: dict[tuple[str, str], dict[str, Any]] = {}
         self.upsert_calls: list[list[dict[str, Any]]] = []
         self.errors_to_raise: list[Exception] = []
+        self.archive_errors: list[Exception] = []
+        self.last_seen_errors: list[Exception] = []
         self.device_status: dict[str, bool] = {}
         self.device_last_seen: list[tuple[str, datetime, str | None]] = []
 
     def archive_raw_message(
         self, topic: str, payload: bytes, received_at: datetime, error: str | None
     ) -> int:
+        if self.archive_errors:
+            raise self.archive_errors.pop(0)
         self.raw_messages.append(
             {"topic": topic, "payload": payload, "received_at": received_at, "error": error}
         )
@@ -180,6 +186,8 @@ class FakeSinkStore:
     def update_device_last_seen(
         self, device_mac: str, at: datetime, firmware_version: str | None
     ) -> None:
+        if self.last_seen_errors:
+            raise self.last_seen_errors.pop(0)
         self.device_last_seen.append((device_mac, at, firmware_version))
 
 
@@ -352,6 +360,112 @@ def test_a_transient_failure_that_persists_through_every_retry_is_counted_as_fai
     assert len(store.upsert_calls) == 4
     assert sink.batch_retries_count == 3
     assert sink.batch_failed_count == 1
+
+
+class FlakyRegistryStore(FakeRegistryStore):
+    """`FakeRegistryStore` whose device lookup fails with queued errors first."""
+
+    def __init__(self, errors: list[Exception]) -> None:
+        super().__init__()
+        self.errors = errors
+
+    def select_device_by_mac(self, mac_address: str) -> DeviceRecord | None:
+        if self.errors:
+            raise self.errors.pop(0)
+        return super().select_device_by_mac(mac_address)
+
+
+def test_a_transient_archive_failure_is_retried_and_the_message_is_kept() -> None:
+    clock = FakeClock()
+    store = FakeSinkStore()
+    store.archive_errors = [SinkTransientError("timeout"), SinkTransientError("timeout")]
+    sink, _ = _make_sink(batch_max_size=1, sink_store=store, clock=clock)
+
+    sink.handle_message(_inbound(_data_envelope()))
+
+    assert len(store.raw_messages) == 1
+    assert len(store.measurements) == 1
+    assert clock.slept == [0.5, 1.0]
+
+
+def test_a_transient_archive_failure_that_persists_through_every_retry_is_raised() -> None:
+    clock = FakeClock()
+    store = FakeSinkStore()
+    store.archive_errors = [SinkTransientError("timeout")] * 4
+    sink, _ = _make_sink(batch_max_size=1, sink_store=store, clock=clock)
+
+    with pytest.raises(SinkTransientError):
+        sink.handle_message(_inbound(_data_envelope()))
+
+    assert clock.slept == [0.5, 1.0, 2.0]
+    assert len(store.raw_messages) == 0
+
+
+def test_a_permanent_archive_failure_is_not_retried() -> None:
+    clock = FakeClock()
+    store = FakeSinkStore()
+    store.archive_errors = [SinkPermanentError("bad request")]
+    sink, _ = _make_sink(batch_max_size=1, sink_store=store, clock=clock)
+
+    with pytest.raises(SinkPermanentError):
+        sink.handle_message(_inbound(_data_envelope()))
+
+    assert clock.slept == []
+
+
+def test_a_transient_registry_failure_is_retried_and_the_readings_are_written() -> None:
+    clock = FakeClock()
+    registry_store = FlakyRegistryStore([SinkTransientError("timeout")])
+    sink, store = _make_sink(batch_max_size=1, registry_store=registry_store, clock=clock)
+
+    sink.handle_message(_inbound(_data_envelope()))
+
+    assert len(store.measurements) == 1
+    assert clock.slept == [0.5]
+
+
+def test_a_transient_registry_failure_on_a_status_update_is_retried() -> None:
+    clock = FakeClock()
+    registry_store = FlakyRegistryStore([SinkTransientError("timeout")])
+    sink, store = _make_sink(registry_store=registry_store, clock=clock)
+
+    sink.handle_status(
+        DeviceStatus(device_mac="AABBCCDDEEFF", online=True, received_at=RECEIVED_AT)
+    )
+
+    assert store.device_status == {"AABBCCDDEEFF": True}
+    assert clock.slept == [0.5]
+
+
+def test_a_transient_last_seen_failure_is_retried() -> None:
+    clock = FakeClock()
+    store = FakeSinkStore()
+    store.last_seen_errors = [SinkTransientError("timeout")]
+    sink, _ = _make_sink(batch_max_size=1, sink_store=store, clock=clock)
+
+    sink.handle_message(_inbound(_data_envelope()))
+
+    assert len(store.device_last_seen) == 1
+    assert clock.slept == [0.5]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda store: store.archive_raw_message(
+            "dl/v1/AABBCCDDEEFF/data", b"{}", RECEIVED_AT, None
+        ),
+        lambda store: store.select_device_by_mac("AABBCCDDEEFF"),
+        lambda store: store.update_device_last_seen("AABBCCDDEEFF", RECEIVED_AT, "1.2.0"),
+    ],
+    ids=["archive", "registry", "last_seen"],
+)
+def test_an_unreachable_supabase_is_reported_as_transient(call: Any) -> None:
+    # A real client against a closed local port: a genuine connection error, no mock.
+    store = SupabaseStore(build_supabase_client("http://127.0.0.1:9", "header.payload.signature"))
+
+    with pytest.raises(SinkTransientError):
+        call(store)
 
 
 # --- Row shape against the real schema ---

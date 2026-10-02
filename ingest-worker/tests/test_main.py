@@ -367,13 +367,75 @@ def test_worker_stops_running_when_shutdown_is_requested_from_another_thread() -
     assert thread.is_alive() is False
 
 
+def test_worker_survives_an_unexpected_error_in_the_idle_flush() -> None:
+    worker, _source, _, _ = _make_worker()
+    worker._sink.flush_if_due = _raise_runtime_error  # type: ignore[method-assign]
+    worker.request_shutdown()
+
+    worker.run()
+
+    assert worker.has_crashed is False
+
+
+def test_worker_marks_itself_crashed_instead_of_dying_silently() -> None:
+    worker, source, _, metrics = _make_worker()
+    metrics.record_message_received = _raise_runtime_error  # type: ignore[method-assign]
+    source.inbound_queue.put(_inbound(_data_envelope()))
+
+    worker.run()
+
+    assert worker.has_crashed is True
+
+
+def _raise_runtime_error(*_args: Any) -> None:
+    raise RuntimeError("unexpected failure")
+
+
 class _RefusingBroker:
     def start(self) -> None:
         raise ConnectionRefusedError("broker unreachable")
 
+    def stop(self) -> None:
+        pass
+
+
+class _BlockingBroker:
+    """Blocks in `start()` until `stop()`, like paho's `loop_forever()`."""
+
+    def __init__(self) -> None:
+        self.stopped = threading.Event()
+
+    def start(self) -> None:
+        self.stopped.wait(timeout=5)
+
+    def stop(self) -> None:
+        self.stopped.set()
+
+
+class _CrashingWorker:
+    has_crashed = True
+
+    def run(self) -> None:
+        pass
+
+    def request_shutdown(self) -> None:
+        pass
+
+
+def test_run_until_stopped_stops_the_source_and_exits_non_zero_when_the_writer_crashes() -> None:
+    broker = _BlockingBroker()
+
+    with pytest.raises(SystemExit) as exit_info:
+        run_until_stopped(broker, _CrashingWorker(), join_timeout_s=2.0)
+
+    assert exit_info.value.code == 1
+    assert broker.stopped.is_set()
+
 
 class _RecordingWorker:
     """Writer stand-in that records its thread; `is_stuck` ignores shutdown requests."""
+
+    has_crashed = False
 
     def __init__(self, *, is_stuck: bool = False) -> None:
         self.is_stuck = is_stuck
