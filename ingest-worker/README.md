@@ -5,9 +5,45 @@ MQTT-to-Supabase ingestion worker. Subscribes to `dl/v1/+/data` and
 `datalogger.v1` payloads, auto-registers devices/sensors on first sight, and
 persists measurements idempotently to Supabase.
 
-See `SDD_Worker_Ingesta.md` for the full behavioral spec, and
-`sdd/worker-ingesta-mqtt/design` (Engram) for the architecture and design
-decisions this implementation follows.
+The full behavioral specification is `docs/SDD_Worker_Ingesta.md` at the
+repository root.
+
+## How it works
+
+Two threads share two bounded queues:
+
+- The **network thread** (paho-mqtt, `src/ingest/sources/hivemq.py`) only
+  receives messages and enqueues them. When a queue is full the message is
+  dropped and counted, so a slow database never blocks the broker connection.
+- The **writer thread** (`Worker` in `src/ingest/main.py`) drains the queues
+  and owns every side effect, through `MeasurementSink`
+  (`src/ingest/sink/supabase_sink.py`):
+  1. archives the raw message in `raw_messages`;
+  2. validates it against the `datalogger.v1` model (`src/ingest/domain/`);
+  3. resolves each reading to its sensor, registering unseen devices, sensor
+     types and sensors (`src/ingest/registry.py`, cached with a TTL);
+  4. classifies each value as `ok` or `out_of_range` against its sensor type;
+  5. batches readings and upserts them into `measurements` on
+     `(sensor_id, timestamp)`, so a replayed message writes nothing new;
+  6. marks the raw message processed once its readings are stored.
+
+A message with `ts: 0` (device clock not yet synchronized) is stamped with the
+arrival time and tagged `ts_source = 'server'`; any other timestamp comes from
+the device and is tagged `device`.
+
+Failure handling:
+
+- A malformed or inconsistent message is archived with its error and skipped;
+  it never stalls the queue.
+- Timeouts, network errors and 5xx responses from Supabase are retried with
+  backoff (0.5, 1 and 2 s). A 4xx is not retried.
+- If the writer thread hits an unexpected error, it stops the MQTT client and
+  the process exits with code 1, so the container's restart policy acts.
+- If the broker rejects the credentials, the process exits with code 1 instead
+  of reconnecting forever. Other connection failures reconnect with backoff
+  (1 s up to 60 s).
+
+Logs and metrics are structured JSON on stdout (`src/ingest/observability.py`).
 
 ## Configuration
 
@@ -36,8 +72,7 @@ broker disconnect one of them (MQTT-3.1.4-2).
 
 `MQTT_CA_CERT_PATH` can stay empty: the default certifi CA bundle validates
 the HiveMQ Cloud broker's certificate chain (Let's Encrypt) without any
-custom CA -- confirmed by spike S2, recorded in Engram
-`sdd/worker-ingesta-mqtt/spike-s2-writeup`.
+custom CA (verification notes in `docs/spikes/s2-hivemq-tls.md`).
 
 ## Running locally
 
@@ -93,12 +128,26 @@ docker logs ingest-worker-test   # look for the writer_loop_stopped event:
 A non-zero `shutdown_undrained_total` means messages were still queued when
 the grace period ran out -- visible in the logs, not silently dropped.
 
+### Running on a server
+
+The base images are multi-architecture, so building on the server itself
+produces a native image (for example `linux/arm64` on an ARM VM). To build
+for another architecture from a workstation, use
+`docker buildx build --platform linux/arm64 -t ingest-worker .`.
+
+Run it detached with a restart policy, so a non-zero exit (writer crash,
+rejected credentials) restarts the worker:
+
+```bash
+docker run -d --name ingest-worker --restart unless-stopped --env-file .env ingest-worker
+docker logs -f ingest-worker
+```
+
 ## Manual end-to-end verification
 
-Phase 12 of `sdd/worker-ingesta-mqtt/tasks` (Engram) is a manual protocol
-against the real broker and a real Supabase project, covering CA-1 through
-CA-9: connected-window delivery, batch idempotency, auto-registration,
-`ts:0` clock handling, corrupt-payload resilience, the `(boot, seq)` outage
-gap (`docs/queries/seq_gaps.sql`), and confirming the worker's credential is
-genuinely subscribe-only. It is not part of this repository's automated
-tests.
+Some acceptance criteria of the specification (CA-1 to CA-9) need the real
+broker and a real Supabase project, so they are checked by hand rather than
+in the automated tests: delivery while connected, batch idempotency,
+auto-registration, `ts:0` clock handling, resilience to corrupt payloads, the
+`(boot, seq)` gap after an outage (`docs/queries/seq_gaps.sql`), and that the
+worker's credential is subscribe-only.
