@@ -108,7 +108,7 @@ def test_scheduled_jobs_are_registered_and_active(cron_query: Callable[[str], st
 
     assert jobs.splitlines() == [
         "purge-raw-messages|30 3 * * *|true",
-        "refresh-daily|10 0 * * *|true",
+        "refresh-daily|10 3 * * *|true",
         "refresh-hourly|5 * * * *|true",
     ]
 
@@ -130,3 +130,22 @@ def test_retention_rollback_unschedules_the_purge_and_reapplying_restores_it(
         cron_query(migration_sql)
 
     assert cron_query(purge_jobs) == "1"
+
+
+_LOCAL_DAY = "20261002150000_daily_buckets_local_day.sql"
+
+
+def test_local_day_rollback_restores_the_utc_refresh_and_reapplying_moves_it_back(
+    cron_query: Callable[[str], str],
+) -> None:
+    daily_schedule = "SELECT schedule FROM cron.job WHERE jobname = 'refresh-daily'"
+    rollback_sql = (_MIGRATIONS_DIR.parent / "rollbacks" / _LOCAL_DAY).read_text()
+    migration_sql = (_MIGRATIONS_DIR / _LOCAL_DAY).read_text()
+
+    cron_query(rollback_sql)
+    try:
+        assert cron_query(daily_schedule) == "10 0 * * *"
+    finally:
+        cron_query(migration_sql)
+
+    assert cron_query(daily_schedule) == "10 3 * * *"
