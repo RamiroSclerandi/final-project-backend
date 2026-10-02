@@ -52,6 +52,15 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Pull Supabase Postgres image
+        run: |
+          for attempt in 1 2 3 4; do
+            docker pull public.ecr.aws/supabase/postgres:17.6.1.167 && exit 0
+            echo "pull attempt $attempt failed; retrying"
+            sleep $((attempt * 10))
+          done
+          exit 1
+
       - name: Integration tests
         run: uv run pytest -m integration -q
 
