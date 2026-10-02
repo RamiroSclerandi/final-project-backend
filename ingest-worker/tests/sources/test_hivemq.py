@@ -15,7 +15,7 @@ from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.reasoncodes import ReasonCode
 
 from ingest.config import Settings
-from ingest.sources.hivemq import HiveMQSource
+from ingest.sources.hivemq import HiveMQSource, MqttAuthenticationError
 
 REQUIRED_ENV = {
     "MQTT_HOST": "test.hivemq.cloud",
@@ -138,6 +138,57 @@ def test_failed_connect_does_not_subscribe(settings: Settings) -> None:
     source._on_connect(fake_client, None, ConnectFlags(session_present=False), failure, None)
 
     assert fake_client.subscribed_topics == []
+
+
+class FakeBrokerClient:
+    """Stands in for the paho client inside `start()`: answers CONNACK with `reason`.
+
+    `loop_forever()` returns only once `disconnect()` was called, like paho's;
+    otherwise it reports that it would have kept reconnecting.
+    """
+
+    def __init__(self, source: HiveMQSource, reason: str) -> None:
+        self.source = source
+        self.reason = reason
+        self.is_disconnected = False
+        self.kept_reconnecting = False
+
+    def connect(self, host: str, port: int, keepalive: int) -> int:
+        return 0
+
+    def loop_forever(self) -> int:
+        connack = ReasonCode(PacketTypes.CONNACK, self.reason)
+        self.source._on_connect(self, None, ConnectFlags(session_present=False), connack, None)
+        self.kept_reconnecting = not self.is_disconnected
+        return 0
+
+    def disconnect(self) -> int:
+        self.is_disconnected = True
+        return 0
+
+
+@pytest.mark.parametrize("reason", ["Bad user name or password", "Not authorized"])
+def test_rejected_credentials_stop_the_client_and_fail_start(
+    settings: Settings, reason: str
+) -> None:
+    source = HiveMQSource(settings)
+    broker = FakeBrokerClient(source, reason)
+    source._client = broker  # type: ignore[assignment]
+
+    with pytest.raises(MqttAuthenticationError, match=reason):
+        source.start()
+
+    assert broker.is_disconnected
+
+
+def test_a_transient_connect_failure_keeps_reconnecting(settings: Settings) -> None:
+    source = HiveMQSource(settings)
+    broker = FakeBrokerClient(source, "Server unavailable")
+    source._client = broker  # type: ignore[assignment]
+
+    source.start()
+
+    assert broker.kept_reconnecting
 
 
 def test_status_topic_yields_online(settings: Settings) -> None:
