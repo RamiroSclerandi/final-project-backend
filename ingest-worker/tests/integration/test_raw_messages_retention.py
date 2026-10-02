@@ -10,6 +10,7 @@ unique topic and asserts only on those.
 """
 
 import secrets
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -67,17 +68,18 @@ def test_unprocessed_and_failed_rows_are_kept_fifteen_days(
     _archive(service_role_client, topic, age=timedelta(days=16), processed=False)
     _archive(service_role_client, topic, age=timedelta(days=14), processed=False)
     _archive(service_role_client, topic, age=timedelta(days=10), processed=False, error="bad")
+    _archive(service_role_client, topic, age=timedelta(days=9), processed=True, error="bad")
 
     query_scalar("SELECT purge_raw_messages()")
 
-    assert _remaining_ages(service_role_client, topic) == [10, 14]
+    assert _remaining_ages(service_role_client, topic) == [9, 10, 14]
 
 
 @pytest.mark.parametrize("client_fixture", ["anon_client", "authenticated_client"])
 def test_clients_cannot_call_the_purge(client_fixture: str, request: pytest.FixtureRequest) -> None:
     client: Client = request.getfixturevalue(client_fixture)
 
-    with pytest.raises(APIError):
+    with pytest.raises(APIError, match="42501"):
         client.rpc("purge_raw_messages").execute()
 
 
@@ -96,10 +98,26 @@ def test_rollback_removes_the_purge_and_reapplying_restores_it(
 
 
 _ARCHIVE_KEY = "20261002130000_raw_messages_archive_key.sql"
+_SCHEMA_RELOAD_TIMEOUT_S = 10.0
+
+
+def _wait_for_postgrest_to_see_payload_md5(client: Client) -> None:
+    """Block until PostgREST's schema cache, reloaded asynchronously, knows the column again."""
+    deadline = time.monotonic() + _SCHEMA_RELOAD_TIMEOUT_S
+    while True:
+        try:
+            client.table("raw_messages").select("payload_md5").limit(1).execute()
+            return
+        except APIError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
 
 
 def test_archive_key_rollback_drops_the_key_and_reapplying_restores_it(
-    apply_sql: Callable[[Path], None], query_scalar: Callable[[str], str]
+    apply_sql: Callable[[Path], None],
+    query_scalar: Callable[[str], str],
+    service_role_client: Client,
 ) -> None:
     key_count = "SELECT count(*) FROM pg_constraint WHERE conname = 'raw_messages_archive_key'"
 
@@ -108,5 +126,7 @@ def test_archive_key_rollback_drops_the_key_and_reapplying_restores_it(
         assert query_scalar(key_count) == "0"
     finally:
         apply_sql(_SUPABASE_DIR / "migrations" / _ARCHIVE_KEY)
+        # Later tests upsert on this key; do not hand them a stale schema cache.
+        _wait_for_postgrest_to_see_payload_md5(service_role_client)
 
     assert query_scalar(key_count) == "1"
