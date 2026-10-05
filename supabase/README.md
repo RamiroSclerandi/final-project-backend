@@ -43,6 +43,14 @@ deno run --allow-env --allow-net supabase/manual/realtime-latency.local.ts
 
 ### Broker round trip
 
+`broker.test.ts` runs in CI and covers the handler publishing through the real
+MQTT client to a throwaway broker. It is skipped unless
+`MQTT_TEST_BROKER_URL` is set; to run it locally, start the broker from step 2
+(the `--network` flags are not needed) and run
+`MQTT_TEST_BROKER_URL=ws://127.0.0.1:9001 deno test --allow-env --allow-net set-sampling-interval/`
+from `supabase/functions`. The manual check below goes further: it runs the
+deployed-shape function in the edge runtime with a real JWT and database.
+
 The real `set-sampling-interval` function (running in the local edge runtime)
 publishes to a throwaway, anonymous `eclipse-mosquitto` broker. The script
 subscribes to `dl/v1/<MAC>/config`, calls the function with a real user JWT,
