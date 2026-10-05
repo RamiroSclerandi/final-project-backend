@@ -163,6 +163,7 @@ Deno.test("returns 500 for a malformed MAC on the device row", async () => {
   );
 
   assertEquals(res.status, 500);
+  assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*");
 });
 
 Deno.test("returns 500 when the device_configs write fails", async () => {
@@ -187,6 +188,7 @@ Deno.test("returns 500 when the device_configs write fails", async () => {
   );
 
   assertEquals(res.status, 500);
+  assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*");
   assertEquals(published, false);
 });
 
