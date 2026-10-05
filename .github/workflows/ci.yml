@@ -87,5 +87,14 @@ jobs:
       - name: Type check
         run: deno check set-sampling-interval/index.ts
 
-      - name: Unit tests
+      # Throwaway anonymous broker for broker.test.ts; the config is inlined
+      # because service containers start before checkout and cannot mount it.
+      - name: Start test MQTT broker
+        run: |
+          docker run -d --name mosquitto -p 9001:9001 eclipse-mosquitto:2 \
+            sh -c 'printf "listener 9001\nprotocol websockets\nallow_anonymous true\n" > /tmp/m.conf && exec mosquitto -c /tmp/m.conf'
+
+      - name: Unit and broker tests
+        env:
+          MQTT_TEST_BROKER_URL: ws://127.0.0.1:9001
         run: deno test --allow-env --allow-net set-sampling-interval/
