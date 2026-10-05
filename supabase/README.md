@@ -3,16 +3,15 @@
 Schema migrations, seed data and the `set-sampling-interval` Edge Function.
 Automated coverage of this directory runs in CI: the ingest-worker integration
 suite (`ingest-worker/tests/integration/`, Postgres + PostgREST, plus a
-Supabase Postgres container for the pg_cron schedule) and the Deno unit tests
-under `functions/`.
+Supabase Postgres container for the pg_cron schedule), the Deno unit tests
+under `functions/`, and `tests/realtime-delivery.test.ts`, which runs against
+a `supabase start` stack in its own CI job.
 
 ## Manual local checks
 
-Two checks need the full local stack and are deliberately not part of CI (a
-`supabase start` is about a dozen containers). Neither is collected by
-`deno test`; run them explicitly. Both create their own user, device and
-sensor with random identifiers and delete them when they finish, even on
-failure.
+Both checks below need the local stack. The Realtime one is also a CI job; the
+broker round trip stays manual. Both create their own user, device and sensor
+with random identifiers and delete them when they finish, even on failure.
 
 Prerequisites: [Supabase CLI](https://supabase.com/docs/guides/cli), Deno 2,
 and a container runtime (Docker, or a running Podman machine). On a small host
@@ -23,22 +22,24 @@ supabase start -x studio,imgproxy,vector,logflare,mailpit,supavisor,postgres-met
 ```
 
 Export the local keys (printed by `supabase start`, or `supabase status -o env`)
-for the scripts:
+for the checks:
 
 ```bash
 export SUPABASE_ANON_KEY=<ANON_KEY>
 export SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY>
 ```
 
-### Realtime latency
+### Realtime delivery
 
 An authenticated client subscribes to `postgres_changes` for `INSERT` on
 `measurements` and `UPDATE` on `devices`; the service role then writes one
-row of each. The INSERT must arrive in under 2 s (the script prints the
-measured time); the UPDATE must arrive within 5 s.
+row of each. The INSERT must arrive within 2 s and the UPDATE within 5 s;
+these are timeouts, not latency measurements. The test is skipped unless
+both keys are exported.
 
 ```bash
-deno run --allow-env --allow-net supabase/manual/realtime-latency.local.ts
+cd supabase
+deno test --allow-env --allow-net tests/
 ```
 
 ### Broker round trip

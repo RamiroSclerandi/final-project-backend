@@ -21,7 +21,7 @@ ESP32 nodes ──MQTT/TLS──> HiveMQ Cloud ──> ingest-worker ──> Sup
 | `supabase/rollbacks/` | Rollback scripts for migrations that need one. |
 | `supabase/seed.sql` | Reference data (sensor types and their expected ranges). |
 | `supabase/functions/set-sampling-interval/` | Edge Function the dashboard calls to change a node's sampling interval; it stores the configuration and publishes it to the node over MQTT. |
-| `supabase/manual/` | Checks that need the full local Supabase stack. See [supabase/README.md](supabase/README.md). |
+| `supabase/tests/` | Tests that need the local Supabase stack (Realtime delivery). See [supabase/README.md](supabase/README.md). |
 
 ## Data flow
 

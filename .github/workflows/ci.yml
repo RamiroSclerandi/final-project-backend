@@ -64,6 +64,44 @@ jobs:
       - name: Integration tests
         run: uv run pytest -m integration -q
 
+  realtime:
+    name: Realtime delivery (local Supabase stack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.117.0
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.6
+
+      # Only the services the test touches: Postgres, Auth, PostgREST, Realtime and Kong.
+      - name: Start Supabase
+        run: supabase start -x studio,imgproxy,vector,logflare,mailpit,supavisor,postgres-meta,storage-api,edge-runtime
+
+      # These are the CLI's fixed local-development keys, not project secrets.
+      - name: Export local keys
+        run: |
+          eval "$(supabase status -o env | grep -E '^(ANON_KEY|SERVICE_ROLE_KEY|API_URL)=')"
+          echo "::add-mask::$SERVICE_ROLE_KEY"
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+          } >> "$GITHUB_ENV"
+
+      - name: Realtime delivery test
+        working-directory: supabase
+        run: |
+          deno fmt --check tests/
+          deno lint tests/
+          deno test --allow-env --allow-net tests/
+
   functions:
     name: Edge Functions (Deno)
     runs-on: ubuntu-latest
