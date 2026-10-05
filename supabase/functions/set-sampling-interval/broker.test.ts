@@ -35,9 +35,16 @@ function buildFakeClient(mac: string): FakeSupabaseClient {
 
 function connectSubscriber(url: string): Promise<mqtt.MqttClient> {
   return new Promise((resolve, reject) => {
-    const client = mqtt.connect(url, { connectTimeout: 10_000 });
+    // No reconnects: an unreachable broker must fail the test, not hang it.
+    const client = mqtt.connect(url, {
+      connectTimeout: 10_000,
+      reconnectPeriod: 0,
+    });
     client.once("connect", () => resolve(client));
-    client.once("error", reject);
+    client.once("error", (err) => {
+      client.end(true);
+      reject(err);
+    });
   });
 }
 
@@ -104,6 +111,9 @@ Deno.test({
       );
     } finally {
       await subscriber.endAsync(true);
+      for (const key of ["MQTT_WS_URL", "MQTT_USER", "MQTT_PASSWORD"]) {
+        Deno.env.delete(key);
+      }
     }
   },
 });
