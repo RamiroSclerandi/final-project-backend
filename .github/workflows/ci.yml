@@ -88,6 +88,8 @@ jobs:
       - name: Export local keys
         run: |
           eval "$(supabase status -o env | grep -E '^(ANON_KEY|SERVICE_ROLE_KEY|API_URL)=')"
+          # Missing keys would make the test skip and the job pass silently.
+          : "${ANON_KEY:?supabase status printed no ANON_KEY}" "${SERVICE_ROLE_KEY:?supabase status printed no SERVICE_ROLE_KEY}"
           echo "::add-mask::$SERVICE_ROLE_KEY"
           {
             echo "SUPABASE_URL=$API_URL"

@@ -91,6 +91,11 @@ function check(what: string, error: { message: string } | null): void {
   if (error) throw new Error(`${what} failed: ${error.message}`);
 }
 
+// Cleanup must not mask the test's own failure, so it logs instead of throwing.
+function reportCleanupError(what: string, error: { message: string } | null) {
+  if (error) console.error(`cleanup failed for ${what}: ${error.message}`);
+}
+
 Deno.test({
   name: "authenticated clients receive measurements INSERT and devices UPDATE",
   ignore: !ANON_KEY || !SERVICE_ROLE_KEY,
@@ -194,13 +199,22 @@ Deno.test({
       await authed.removeAllChannels();
       // Deleting the device cascades to sensors and measurements.
       if (deviceId) {
-        await admin.from("devices").delete().eq("id", deviceId);
+        const { error } = await admin.from("devices").delete().eq(
+          "id",
+          deviceId,
+        );
+        reportCleanupError(`device ${deviceId}`, error);
       }
       if (sensorTypeId) {
-        await admin.from("sensor_types").delete().eq("id", sensorTypeId);
+        const { error } = await admin.from("sensor_types").delete().eq(
+          "id",
+          sensorTypeId,
+        );
+        reportCleanupError(`sensor type ${sensorTypeId}`, error);
       }
       if (userId) {
-        await admin.auth.admin.deleteUser(userId);
+        const { error } = await admin.auth.admin.deleteUser(userId);
+        reportCleanupError(`user ${userId}`, error);
       }
     }
   },
