@@ -46,12 +46,16 @@ def _sensor_with_readings(
 
 
 def _series(
-    client: Client, sensor_id: str, start: datetime, end: datetime, bucket: str
+    client: Client,
+    sensor_id: str,
+    start: datetime | None,
+    end: datetime | None,
+    bucket: str | None,
 ) -> list[dict[str, Any]]:
     params = {
         "p_sensor_id": sensor_id,
-        "p_from": start.isoformat(),
-        "p_to": end.isoformat(),
+        "p_from": start.isoformat() if start else None,
+        "p_to": end.isoformat() if end else None,
         "p_bucket": bucket,
     }
     rows: list[dict[str, Any]] = client.rpc("get_sensor_series", params).execute().data
@@ -205,9 +209,9 @@ def test_function_is_stable_sql_invoker_with_empty_search_path(
     assert attributes == 'sql|s|false|search_path=""'
 
 
-@pytest.mark.parametrize("bucket", ["second", "week", "month", "MINUTE", ""])
+@pytest.mark.parametrize("bucket", ["second", "week", "month", "MINUTE", "", None])
 def test_bucket_outside_the_allowlist_is_rejected(
-    authenticated_client: Client, bucket: str
+    authenticated_client: Client, bucket: str | None
 ) -> None:
     with pytest.raises(APIError) as error:
         _series(
@@ -233,6 +237,19 @@ def test_empty_or_inverted_range_is_rejected(
             _START + width,
             "minute",
         )
+
+    assert "p_to must be later than p_from" in str(error.value.message)
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [(None, _START + timedelta(hours=1)), (_START, None), (None, None)],
+)
+def test_missing_range_bound_is_rejected(
+    authenticated_client: Client, start: datetime | None, end: datetime | None
+) -> None:
+    with pytest.raises(APIError) as error:
+        _series(authenticated_client, "00000000-0000-0000-0000-000000000000", start, end, "minute")
 
     assert "p_to must be later than p_from" in str(error.value.message)
 
