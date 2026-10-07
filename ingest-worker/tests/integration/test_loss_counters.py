@@ -1,6 +1,5 @@
 """Firmware loss counters on `measurements`: `lost` and `store_drop`, and their rollback."""
 
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,7 +14,6 @@ pytestmark = pytest.mark.integration
 
 _SUPABASE_DIR = Path(__file__).resolve().parents[3] / "supabase"
 _LOSS_COUNTERS = "20261002140000_measurements_loss_counters.sql"
-_SCHEMA_RELOAD_TIMEOUT_S = 10.0
 
 
 def _sensor_id(store: SupabaseStore, mac: str) -> str:
@@ -25,18 +23,6 @@ def _sensor_id(store: SupabaseStore, mac: str) -> str:
     sensor = store.insert_sensor(device.id, sensor_type.id, "bmp280", "")
     assert sensor is not None
     return sensor.id
-
-
-def _wait_for_postgrest_to_see_loss_counters(client: Client) -> None:
-    deadline = time.monotonic() + _SCHEMA_RELOAD_TIMEOUT_S
-    while True:
-        try:
-            client.table("measurements").select("lost,store_drop").limit(1).execute()
-            return
-        except APIError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.2)
 
 
 def test_loss_counters_round_trip_through_the_worker_upsert(
@@ -92,7 +78,13 @@ def test_rollback_drops_the_loss_counters_and_reapplying_restores_them(
     apply_sql: Callable[[Path], None],
     query_scalar: Callable[[str], str],
     service_role_client: Client,
+    wait_for_postgrest: Callable[[Callable[[], object], bool], None],
 ) -> None:
+    def probe() -> object:
+        return (
+            service_role_client.table("measurements").select("lost,store_drop").limit(1).execute()
+        )
+
     columns = (
         "SELECT count(*) FROM information_schema.columns "
         "WHERE table_name = 'measurements' AND column_name IN ('lost', 'store_drop')"
@@ -101,9 +93,10 @@ def test_rollback_drops_the_loss_counters_and_reapplying_restores_them(
     apply_sql(_SUPABASE_DIR / "rollbacks" / _LOSS_COUNTERS)
     try:
         assert query_scalar(columns) == "0"
+        wait_for_postgrest(probe, False)
     finally:
         apply_sql(_SUPABASE_DIR / "migrations" / _LOSS_COUNTERS)
-        _wait_for_postgrest_to_see_loss_counters(service_role_client)
+        wait_for_postgrest(probe, True)
 
     assert query_scalar(columns) == "2"
 
