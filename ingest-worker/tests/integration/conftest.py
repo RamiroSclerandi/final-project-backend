@@ -39,6 +39,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from postgrest.exceptions import APIError
 from supabase import Client, create_client
 from testcontainers.community.postgres import PostgresContainer
 from testcontainers.core.container import DockerContainer
@@ -57,6 +58,7 @@ _POSTGRES_ALIAS = "postgres"
 _POSTGREST_IMAGE = "postgrest/postgrest:v12.2.8"
 _POSTGREST_PORT = 3000
 _IDENTIFIER_PATTERN = re.compile(r"[a-z_][a-z0-9_]*")
+_SCHEMA_RELOAD_TIMEOUT_S = 10.0
 
 
 def _run_sql_file(postgres: PostgresContainer, content: bytes, container_path: str) -> None:
@@ -291,3 +293,31 @@ def apply_sql(
         _run_sql_file(postgres, path.read_bytes(), f"/tmp/{path.name}")
 
     return apply
+
+
+@pytest.fixture
+def wait_for_postgrest() -> Callable[[Callable[[], object], bool], None]:
+    """Return a function polling an API call until PostgREST serves it, or stops serving it.
+
+    Each migration and rollback ends with `NOTIFY pgrst`, and the schema cache
+    reloads asynchronously. A rollback test must wait for the rollback's reload
+    before reapplying: otherwise a probe can pass on the stale pre-rollback
+    cache, and the rollback's late reload hides the object from the next test.
+    """
+
+    def wait(probe: Callable[[], object], serves: bool) -> None:
+        deadline = time.monotonic() + _SCHEMA_RELOAD_TIMEOUT_S
+        while True:
+            try:
+                probe()
+                served = True
+            except APIError:
+                served = False
+            if served == serves:
+                return
+            if time.monotonic() >= deadline:
+                state = "serve" if serves else "stop serving"
+                raise TimeoutError(f"PostgREST did not {state} the probed call in time")
+            time.sleep(0.2)
+
+    return wait

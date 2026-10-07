@@ -296,14 +296,28 @@ def test_range_at_the_maximum_width_is_accepted(
 
 
 def test_rollback_drops_the_function_and_reapplying_restores_it(
-    apply_sql: Callable[[Path], None], query_scalar: Callable[[str], str]
+    apply_sql: Callable[[Path], None],
+    query_scalar: Callable[[str], str],
+    authenticated_client: Client,
+    wait_for_postgrest: Callable[[Callable[[], object], bool], None],
 ) -> None:
     exists = f"SELECT to_regprocedure('{_SIGNATURE}') IS NOT NULL"
+
+    def probe() -> object:
+        return _series(
+            authenticated_client,
+            "00000000-0000-0000-0000-000000000000",
+            _START,
+            _START + timedelta(hours=1),
+            "minute",
+        )
 
     apply_sql(_SUPABASE_DIR / "rollbacks" / _SERIES)
     try:
         assert query_scalar(exists) == "f"
+        wait_for_postgrest(probe, False)
     finally:
         apply_sql(_SUPABASE_DIR / "migrations" / _SERIES)
+        wait_for_postgrest(probe, True)
 
     assert query_scalar(exists) == "t"
