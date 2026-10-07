@@ -195,3 +195,20 @@ def test_rejects_unknown_meta_field() -> None:
 
     with pytest.raises(ValidationError):
         DataloggerV1.model_validate(message)
+
+
+@pytest.mark.parametrize("ts", [1788804294000, -1, 1, 946684799, 4102444801])
+def test_rejects_ts_outside_plausible_unix_seconds(ts: int) -> None:
+    envelope = _load_fixture("no_aggregation.json")
+    envelope["ts"] = ts
+
+    with pytest.raises(ValidationError, match="ts must be 0 or Unix seconds"):
+        DataloggerV1.model_validate(envelope)
+
+
+@pytest.mark.parametrize("ts", [0, 946684800, 4102444800])
+def test_accepts_unsynchronized_clock_and_range_bounds(ts: int) -> None:
+    envelope = _load_fixture("no_aggregation.json")
+    envelope["ts"] = ts
+
+    assert DataloggerV1.model_validate(envelope).ts == ts

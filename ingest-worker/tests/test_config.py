@@ -145,3 +145,18 @@ def test_effective_client_id_differs_across_instances(valid_env: None) -> None:
     assert first.mqtt_client_id != second.mqtt_client_id
     assert first.mqtt_client_id.startswith("ingest-worker-")
     assert second.mqtt_client_id.startswith("ingest-worker-")
+
+
+def test_log_level_is_case_insensitive(monkeypatch: pytest.MonkeyPatch, valid_env: None) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+
+    assert Settings().log_level == "DEBUG"
+
+
+def test_unknown_log_level_fails_loudly_and_names_it(
+    monkeypatch: pytest.MonkeyPatch, valid_env: None
+) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "INFOO")
+
+    with pytest.raises(ValidationError, match="log_level"):
+        Settings()

@@ -7,6 +7,7 @@ Supabase connection is attempted. Secrets never have a default value, and
 `SecretStr` keeps them out of `repr()`/`str()`.
 """
 
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import Field, PrivateAttr, SecretStr, field_validator
@@ -43,7 +44,7 @@ class Settings(BaseSettings):
     # Registry cache.
     registry_cache_ttl_s: int = Field(default=900, gt=0)
 
-    log_level: str = "INFO"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     _client_id_suffix: str = PrivateAttr(default_factory=lambda: uuid4().hex[:8])
 
@@ -53,6 +54,11 @@ class Settings(BaseSettings):
         if not value.get_secret_value().strip():
             raise ValueError("secret must not be blank")
         return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _uppercase_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
 
     @property
     def mqtt_client_id(self) -> str:
