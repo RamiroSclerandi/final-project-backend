@@ -13,6 +13,11 @@ from pydantic import BaseModel, ConfigDict, NonNegativeInt, field_validator, mod
 
 _MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
 
+# 2000-01-01 and 2100-01-01 UTC. A millisecond timestamp would otherwise pass
+# validation and overflow `datetime` in normalize, after the message is archived.
+_MIN_TS = 946684800
+_MAX_TS = 4102444800
+
 
 class Store(BaseModel):
     """On-device buffer state (`meta.store`)."""
@@ -89,6 +94,13 @@ class DataloggerV1(BaseModel):
     def _reject_unknown_version(cls, value: int) -> int:
         if value != 1:
             raise ValueError(f"unsupported datalogger contract version: {value}")
+        return value
+
+    @field_validator("ts")
+    @classmethod
+    def _check_ts_range(cls, value: int) -> int:
+        if value != 0 and not _MIN_TS <= value <= _MAX_TS:
+            raise ValueError(f"ts must be 0 or Unix seconds between 2000 and 2100, got {value}")
         return value
 
     @field_validator("dev")
