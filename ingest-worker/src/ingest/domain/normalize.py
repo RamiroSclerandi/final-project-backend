@@ -1,8 +1,4 @@
-"""Convert a validated `datalogger.v1` payload into canonical readings.
-
-A channel with `ok: false` produces no `Reading` here — the sink layer
-archives the raw message independently of this conversion.
-"""
+"""Convert a validated `datalogger.v1` payload into canonical readings."""
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,12 +8,7 @@ from ingest.domain.payload import DataloggerV1
 
 @dataclass(frozen=True)
 class Reading:
-    """One channel of one message: exactly one row of `measurements`.
-
-    `value` is a plain float and there is no `valid` flag, because a failed
-    channel never produces a row: `measurements.value` is NOT NULL and the
-    table has no `valid` column.
-    """
+    """One `measurements` row; a failed channel produces none, so `value` is never null."""
 
     device_mac: str
     channel: str
@@ -38,17 +29,7 @@ class Reading:
 
 
 def normalize(payload: DataloggerV1, received_at: datetime) -> list[Reading]:
-    """Convert one validated envelope into its canonical readings.
-
-    Args:
-        payload: A validated `datalogger.v1` envelope (guarantees `v == 1`).
-        received_at: Server arrival time, used when the device clock is
-            unsynchronized (`ts == 0`).
-
-    Returns:
-        One `Reading` per channel where `ok` is true, in payload order.
-        Channels with `ok: false` are skipped entirely.
-    """
+    """Convert one envelope into readings, skipping channels with `ok: false`."""
     if payload.ts == 0:
         recorded_at = received_at
         ts_source = "server"

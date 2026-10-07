@@ -1,40 +1,12 @@
 """Composition root: builds the object graph and owns the writer loop.
 
-Two threads, one queue: the paho network thread (blocking in
-`HiveMQSource.start()`, kept on the *main* thread so Python delivers
-SIGTERM/SIGINT there) only enqueues; `Worker` below runs on a separate writer
-thread, drains `HiveMQSource.inbound_queue`/`status_queue`, drives
-`MeasurementSink` and feeds the `Metrics`/`SeqGapTracker` from
-`observability.py`.
+paho blocks the main thread, so SIGTERM/SIGINT land there, and only enqueues.
+`Worker` drains the queues on a writer thread, each item in its own
+try/except, so one bad item never stalls the queue.
 
-Each dequeued item is processed inside its own `try/except Exception`: a
-failure discards that item only, so no payload can stall the queue.
-`MeasurementSink.handle_message` already isolates a malformed JSON payload
-internally (it archives the error and returns without raising); the broader
-catch here additionally isolates unexpected failures past that point, such as
-a registry resolution error or a store failure.
-
-`Metrics.measurements_rows_submitted_total`/`_written_total` are derived from
-`MeasurementSink`'s public counters (`pending_count`, `batches_written_count`,
-`batch_failed_count`, `duplicates_skipped_count`) plus the reading count taken
-from the payload this loop already parses for `channels_failed_total` and
-`SeqGapTracker`.
-
-Shutdown sequence (SIGTERM/SIGINT, budget `_SHUTDOWN_GRACE_S=8s` inside
-Docker's 10s Linux grace period):
-1. The signal handler (main thread) calls `HiveMQSource.stop()`
-   (`client.disconnect()`), which makes the blocking `start()` call on the
-   main thread return, and `Worker.request_shutdown()`, which records the
-   deadline and flips the writer thread's stop flag.
-2. The writer thread keeps draining (`queue.Queue.get(timeout=...)`) until
-   both queues are empty or the deadline passes.
-3. The writer thread force-flushes the pending batch unconditionally (even
-   below `BATCH_MAX_SIZE`) and reports `shutdown_flushed_rows_total`/
-   `shutdown_undrained_total`.
-
-`sources/hivemq.py` does not drop messages once shutdown starts:
-`client.disconnect()` already stops the broker from delivering further
-messages for practical purposes.
+Shutdown: the signal handler stops the source and opens an 8 s grace period
+(inside Docker's 10 s). The writer drains until the queues are empty or the
+deadline passes, then force-flushes the pending batch.
 """
 
 import logging
@@ -84,14 +56,7 @@ class WorkerSource(SourceCounters, Protocol):
 
 
 class Worker:
-    """Drains a source's bounded queues on one thread and owns graceful shutdown.
-
-    See the module docstring for the shutdown sequence and the
-    `measurements_rows_*` wiring approach. Threading contract: `run()` is
-    meant to execute on its own thread; `request_shutdown()` is meant to be
-    called from a different thread (the signal handler, on the main thread)
-    and is safe to call more than once.
-    """
+    """Drains a source's queues on one thread and owns graceful shutdown."""
 
     def __init__(
         self,
@@ -117,22 +82,13 @@ class Worker:
         self.has_crashed = False
 
     def request_shutdown(self) -> None:
-        """Stop draining once the queues are empty or the grace period elapses.
-
-        Safe to call from a different thread than `run()`, and safe to call
-        more than once (a second call, e.g. SIGINT arriving after SIGTERM,
-        does not push the deadline back).
-        """
+        """Stop once the queues drain or the grace period ends; idempotent, any thread."""
         if not self._shutdown_event.is_set():
             self._deadline = self._clock() + self._shutdown_grace_s
         self._shutdown_event.set()
 
     def run(self) -> None:
-        """Drain both queues until told to stop, then force-flush and return.
-
-        An unexpected error escaping the loop sets `has_crashed` instead of
-        killing the thread silently, so the caller can stop the process.
-        """
+        """Drain until told to stop, then force-flush; a crash sets `has_crashed`."""
         log_event("writer_loop_started")
         try:
             while not self._shutdown_deadline_passed():
@@ -162,9 +118,7 @@ class Worker:
             drained = True
             self._handle_data_message(message)
         else:
-            # Idle: still check the age-based threshold so a partial batch
-            # never sits past BATCH_MAX_AGE_MS just because no new message
-            # arrived to trigger `handle_message`'s own `flush_if_due` call.
+            # Idle: a partial batch must still flush once it reaches BATCH_MAX_AGE_MS.
             try:
                 self._track_and_flush(self._sink.flush_if_due)
             except Exception as exc:
@@ -187,9 +141,6 @@ class Worker:
         try:
             self._track_and_flush(lambda: self._sink.handle_message(message), added=added)
         except Exception as exc:
-            # Isolates a failure past `handle_message`'s own JSON-validation
-            # guard (e.g. a registry resolution error); one item's failure never
-            # stalls the queue.
             log_event(
                 "writer_loop_message_failed",
                 level=logging.ERROR,
@@ -227,20 +178,7 @@ class Worker:
             )
 
     def _track_and_flush(self, flush: Callable[[], None], added: int = 0) -> int:
-        """Run a call that may flush the sink's pending batch, and record it.
-
-        Args:
-            flush: `MeasurementSink.handle_message`, `.flush_if_due`, or
-                `.flush` -- anything that may trigger at most one batch
-                write.
-            added: Readings this call buffers before it might flush (0 for
-                a call that only flushes, e.g. the idle/shutdown paths).
-
-        Returns:
-            The number of rows submitted in this flush, or 0 if no flush
-            happened (`MeasurementSink.flush()` is a no-op when nothing is
-            pending).
-        """
+        """Run a call that may flush one batch and record it; returns rows submitted."""
         pending_before = self._sink.pending_count
         written_before = self._sink.batches_written_count
         duplicates_before = self._sink.duplicates_skipped_count
@@ -296,15 +234,10 @@ class Drainable(Protocol):
 
 
 def run_until_stopped(source: BlockingSource, worker: Drainable, join_timeout_s: float) -> None:
-    """Run the writer thread while `source.start()` blocks the caller.
+    """Run the writer thread while `source.start()` blocks.
 
-    The writer is released even when `start()` raises (e.g. broker unreachable), and it
-    is a daemon, so a writer still stuck after `join_timeout_s` cannot keep the process
-    alive. A crashed writer stops the source, so the process does not keep
-    consuming with nobody persisting.
-
-    Raises:
-        SystemExit: With code 1 when the writer crashed, so a restart policy sees it.
+    The daemon writer is released even when `start()` raises. A crashed writer
+    stops the source and exits with code 1 so a restart policy sees it.
     """
 
     def _run_writer() -> None:
@@ -329,18 +262,9 @@ def build_supabase_client(url: str, key: str) -> Client:
 
 
 def _load_settings() -> Settings:
-    """Load and validate `Settings`, failing loudly before any connection.
-
-    Raises:
-        SystemExit: If a required variable is missing, blank, or invalid.
-            The field name is logged; its value never is.
-    """
+    """Load `Settings` or exit with code 1, logging the field name but never its value."""
     try:
-        # pydantic-settings sources required fields from the environment at
-        # runtime; mypy's stub-based view of BaseSettings does not know that
-        # without the pydantic mypy plugin, which this project does not
-        # enable (see tests/test_config.py for the same bare `Settings()`
-        # call, exercised only outside mypy's `src`-only scope).
+        # Fields come from the environment; mypy cannot see that without the pydantic plugin.
         return Settings()  # type: ignore[call-arg]
     except ValidationError as exc:
         configure_logging("INFO")
@@ -349,15 +273,7 @@ def _load_settings() -> Settings:
 
 
 def main() -> None:
-    """Build the object graph, run the writer thread, and block on the network thread.
-
-    Not unit-tested: this function only wires already-tested components
-    together and calls blocking OS-level APIs (`HiveMQSource.start()`,
-    `signal.signal`). `Worker` -- the part with real logic -- is tested
-    directly in `tests/test_main.py` against a fake source and a fake sink
-    store, per this project's convention of never mocking paho-mqtt or
-    supabase-py.
-    """
+    """Build the object graph, start the writer thread and block on the network thread."""
     settings = _load_settings()
     configure_logging(settings.log_level)
     log_event("worker_starting", client_id=settings.mqtt_client_id)

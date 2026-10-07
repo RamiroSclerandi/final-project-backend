@@ -1,9 +1,4 @@
-"""Resolve a `Reading` to its `sensor_id`, auto-registering unseen devices,
-sensor types, and sensors, backed by a bounded-TTL cache.
-
-This is what lets a new node or a new channel register itself without a code
-deploy.
-"""
+"""Resolve readings to `sensor_id`, registering unseen devices, sensor types and sensors."""
 
 import time
 from collections.abc import Callable
@@ -26,13 +21,7 @@ class DeviceRecord:
 
 @dataclass(frozen=True)
 class SensorTypeRecord:
-    """One row of `sensor_types`, narrowed to what resolution needs.
-
-    `expected_min`/`expected_max` are the quality-banding thresholds the
-    sink compares each reading against. They
-    are editable through the web platform, so a cached record can lag a
-    threshold edit by up to one TTL — see `Registry.expected_range`.
-    """
+    """One `sensor_types` row; thresholds are editable, so a cached copy can lag one TTL."""
 
     id: str
     name: str
@@ -53,13 +42,10 @@ class SensorRecord:
 
 
 class RegistryStore(Protocol):
-    """Persistence port the registry needs, independent of any DB client.
+    """Persistence port the registry needs.
 
-    Every `insert_sensor_type`/`insert_sensor` call mirrors
-    `INSERT ... ON CONFLICT DO NOTHING`: it returns `None`, not an error,
-    when a concurrent writer (another worker instance, or the web platform)
-    already inserted the identical row between the caller's SELECT and this
-    INSERT. Callers MUST re-select on `None`, never treat it as failure.
+    `insert_sensor_type`/`insert_sensor` behave like INSERT ... ON CONFLICT DO NOTHING:
+    `None` means another writer won the race, and callers must re-select.
     """
 
     def select_device_by_mac(self, mac_address: str) -> DeviceRecord | None: ...
@@ -80,40 +66,15 @@ class RegistryStore(Protocol):
 
 
 class RegistryResolutionError(RuntimeError):
-    """A row vanished between an insert conflict and the recovery re-select.
-
-    Distinct from the expected race (insert conflict, then a successful
-    re-select): this means the store itself returned an inconsistent result,
-    not merely that another writer won a race.
-    """
+    """A row vanished between an insert conflict and the re-select."""
 
 
 class Registry:
-    """Resolves `Reading`s to `sensor_id`, auto-registering unseen rows.
+    """Resolves `Reading`s to `sensor_id` through TTL caches. Single writer thread only.
 
-    Resolution is a cache hit, else
-    devices -> sensor_types -> sensors (SELECT, INSERT-ON-CONFLICT-DO-NOTHING,
-    SELECT again), then cache and return.
-
-    Threading contract: an instance is confined to the single writer thread
-    that owns the pending batch and the Supabase client. It takes no
-    lock and is not safe for concurrent use from more than one thread.
-
-    Cache scope: the resolved `sensor_id` is cached, keyed by
-    `(mac, channel, unit, tag, source)`; `devices.name` and every other
-    mutable column besides sensor-type thresholds are never cached, because
-    the web platform's UI can edit those columns concurrently while ids are
-    immutable by construction. A cached id is trusted for `ttl_seconds`
-    (`REGISTRY_CACHE_TTL_S`); after that it expires and resolution runs
-    again. This bounds the one real staleness risk of caching an id at all —
-    that the row was deleted through the web platform in the meantime — to
-    at most one TTL window.
-
-    A second, separate TTL-bound cache holds the resolved `SensorTypeRecord`
-    (including `expected_min`/`expected_max`) keyed by `(name, unit)`. Its
-    thresholds ARE mutable through the web platform, so quality banding
-    (`expected_range`) can be stale for up to one TTL window after a
-    threshold edit. Accepted: ids themselves cannot go stale this way.
+    Ids are immutable, so a cached id is trusted for one TTL; a row deleted from the
+    web app is noticed within that window. Sensor type thresholds are editable, so
+    quality banding can lag an edit by one TTL.
     """
 
     def __init__(
@@ -129,14 +90,7 @@ class Registry:
         self._sensor_type_cache: dict[tuple[str, str], tuple[SensorTypeRecord, float]] = {}
 
     def resolve(self, reading: Reading) -> str:
-        """Resolve one `Reading` to its `sensor_id`, registering as needed.
-
-        Args:
-            reading: One normalized channel reading.
-
-        Returns:
-            The id of the `sensors` row for this device/channel/source/tag.
-        """
+        """Resolve one reading to its `sensor_id`, registering rows as needed."""
         key = self._cache_key(reading)
         cached_id = self._cached(key)
         if cached_id is not None:
@@ -150,37 +104,15 @@ class Registry:
         return sensor.id
 
     def expected_range(self, channel: str, unit: str) -> tuple[float | None, float | None]:
-        """Return the accepted `[expected_min, expected_max]` range for a channel/unit.
-
-        Used by the sink for quality banding.
-        Backed by the same TTL-bound `sensor_types` cache `resolve()`
-        populates, so calling this after `resolve()` for the same channel
-        issues no further query.
-
-        Args:
-            channel: `sensor_types.name` — same value as `Reading.channel`.
-            unit: `sensor_types.unit`.
-
-        Returns:
-            `(expected_min, expected_max)`, either or both `None` when the
-            sensor type has no configured threshold.
-        """
+        """Return `(expected_min, expected_max)` for a channel, from the sensor type cache."""
         sensor_type = self._resolve_sensor_type(channel, unit)
         return (sensor_type.expected_min, sensor_type.expected_max)
 
     def ensure_device(self, mac_address: str) -> str:
         """Resolve a device by MAC, registering it if unseen.
 
-        A retained status message arrives the moment the worker subscribes,
-        before any data message has registered the device. Updating a row
-        that does not exist yet is silently lost, so the device stays at the
-        schema's default until it happens to reconnect.
-
-        Args:
-            mac_address: The device MAC as it appears on the topic.
-
-        Returns:
-            The id of the `devices` row.
+        A retained status arrives before any data message, and an UPDATE on a missing
+        row is silently lost.
         """
         return self._resolve_device(mac_address).id
 
