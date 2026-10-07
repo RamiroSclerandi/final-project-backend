@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from postgrest.exceptions import APIError
 
 from ingest.main import build_supabase_client
 from ingest.registry import DeviceRecord, Registry, SensorRecord, SensorTypeRecord
@@ -25,6 +26,7 @@ from ingest.sink.supabase_sink import (
     SinkPermanentError,
     SinkTransientError,
     SupabaseStore,
+    _classify_api_error,
     build_raw_message_row,
     record_from_row,
 )
@@ -146,6 +148,7 @@ class FakeSinkStore:
         self.errors_to_raise: list[Exception] = []
         self.archive_errors: list[Exception] = []
         self.last_seen_errors: list[Exception] = []
+        self.status_errors: list[Exception] = []
         self.device_status: dict[str, bool] = {}
         self.device_last_seen: list[tuple[str, datetime, str | None]] = []
 
@@ -176,6 +179,8 @@ class FakeSinkStore:
         return written
 
     def update_device_status(self, device_mac: str, online: bool, at: datetime) -> None:
+        if self.status_errors:
+            raise self.status_errors.pop(0)
         if device_mac not in self.known_devices:
             return
         self.device_status[device_mac] = online
@@ -458,6 +463,31 @@ def test_a_transient_last_seen_failure_is_retried() -> None:
     assert clock.slept == [0.5]
 
 
+def test_a_transient_status_update_failure_is_retried() -> None:
+    clock = FakeClock()
+    registry_store = FakeRegistryStore()
+    store = FakeSinkStore(registry_store.devices)
+    store.status_errors = [SinkTransientError("timeout")]
+    sink, _ = _make_sink(sink_store=store, registry_store=registry_store, clock=clock)
+
+    sink.handle_status(
+        DeviceStatus(device_mac="AABBCCDDEEFF", online=True, received_at=RECEIVED_AT)
+    )
+
+    assert store.device_status == {"AABBCCDDEEFF": True}
+    assert clock.slept == [0.5]
+
+
+def test_a_millisecond_timestamp_is_archived_with_its_error_and_writes_nothing() -> None:
+    sink, store = _make_sink(batch_max_size=1)
+
+    sink.handle_message(_inbound(_data_envelope(ts=1788804294000)))
+
+    assert len(store.raw_messages) == 1
+    assert "ts must be 0 or Unix seconds" in str(store.raw_messages[0]["error"])
+    assert store.measurements == {}
+
+
 @pytest.mark.parametrize(
     "call",
     [
@@ -466,8 +496,9 @@ def test_a_transient_last_seen_failure_is_retried() -> None:
         ),
         lambda store: store.select_device_by_mac("AABBCCDDEEFF"),
         lambda store: store.update_device_last_seen("AABBCCDDEEFF", RECEIVED_AT, "1.2.0"),
+        lambda store: store.update_device_status("AABBCCDDEEFF", True, RECEIVED_AT),
     ],
-    ids=["archive", "registry", "last_seen"],
+    ids=["archive", "registry", "last_seen", "status"],
 )
 def test_an_unreachable_supabase_is_reported_as_transient(call: Any) -> None:
     # A real client against a closed local port: a genuine connection error, no mock.
@@ -475,6 +506,42 @@ def test_an_unreachable_supabase_is_reported_as_transient(call: Any) -> None:
 
     with pytest.raises(SinkTransientError):
         call(store)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "PGRST000",  # PostgREST cannot reach the database (HTTP 503)
+        "PGRST001",
+        "PGRST002",
+        "PGRST003",
+        "08006",  # connection failure
+        "40001",  # serialization failure
+        "40P01",  # deadlock detected
+        "53300",  # too many connections
+        "57P01",  # admin shutdown, e.g. a Supabase restart
+        "503",  # raw HTTP status, non-JSON error body
+    ],
+)
+def test_a_retryable_error_code_is_classified_as_transient(code: str) -> None:
+    assert isinstance(_classify_api_error(APIError({"code": code})), SinkTransientError)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "23514",  # check violation
+        "23503",  # foreign key violation
+        "42501",  # insufficient privilege
+        "42703",  # undefined column
+        "22P02",  # invalid text representation
+        "PGRST204",  # unknown column in the request
+        "400",
+        None,
+    ],
+)
+def test_a_request_error_code_is_classified_as_permanent(code: str | None) -> None:
+    assert isinstance(_classify_api_error(APIError({"code": code})), SinkPermanentError)
 
 
 # --- Row shape against the real schema ---

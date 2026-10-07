@@ -48,8 +48,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Per-batch retry backoff: up to 3 retries beyond the initial attempt, on
-# timeout/5xx only. A 4xx is never retried — the request itself is wrong and
-# retrying will not fix it.
+# transient failures only. A request or constraint error is never retried —
+# the request itself is wrong and retrying will not fix it.
 _RETRY_DELAYS_S = (0.5, 1.0, 2.0)
 
 # Internal tunable, not exposed as a config var — same precedent as
@@ -62,12 +62,13 @@ _DEVICE_TOUCH_MIN_INTERVAL_S = 60.0
 class SinkTransientError(Exception):
     """A batch write failed for a reason expected to succeed on retry.
 
-    Maps to a request timeout or a Supabase 5xx response.
+    Maps to a timeout, a connection failure, or a retryable database error
+    (see `_classify_api_error`).
     """
 
 
 class SinkPermanentError(Exception):
-    """A batch write failed for a reason retry will not fix (a 4xx response)."""
+    """A batch write failed for a reason retry will not fix (a request or constraint error)."""
 
 
 def record_from_row[RecordT](record_type: type[RecordT], row: dict[str, Any]) -> RecordT:
@@ -317,7 +318,11 @@ class MeasurementSink:
         visible.
         """
         self._call_with_retry(lambda: self._registry.ensure_device(status.device_mac))
-        self._store.update_device_status(status.device_mac, status.online, status.received_at)
+        self._call_with_retry(
+            lambda: self._store.update_device_status(
+                status.device_mac, status.online, status.received_at
+            )
+        )
 
     def flush_if_due(self) -> None:
         """Flush the pending batch if it has reached size or age."""
@@ -540,9 +545,10 @@ class SupabaseStore:
         return len(response.data)
 
     def update_device_status(self, device_mac: str, online: bool, at: datetime) -> None:
-        self._client.table("devices").update({"status": online}).eq(
-            "mac_address", device_mac
-        ).execute()
+        with _classified_errors():
+            self._client.table("devices").update({"status": online}).eq(
+                "mac_address", device_mac
+            ).execute()
 
     def update_device_last_seen(
         self, device_mac: str, at: datetime, firmware_version: str | None
@@ -564,17 +570,24 @@ def _classified_errors() -> Iterator[None]:
         raise _classify_api_error(exc) from exc
 
 
+# SQLSTATE classes a retry can outlive: connection exception, transaction
+# rollback (serialization, deadlock), insufficient resources, operator
+# intervention (a restart or cancelled statement).
+_TRANSIENT_SQLSTATE_CLASSES = frozenset({"08", "40", "53", "57"})
+
+
 def _classify_api_error(exc: APIError) -> SinkTransientError | SinkPermanentError:
     """Classify a `postgrest.exceptions.APIError` as transient or permanent.
 
-    `APIError.code` is a Postgres SQLSTATE (e.g. `"53300"`, too-many-
-    connections) when PostgREST returns a JSON error body, or the raw HTTP
-    status code when it does not. A numeric code >= 500 is transient
-    (retry); anything else — a 4xx, or a non-numeric SQLSTATE from a JSON
-    error body — is treated as permanent, since retrying an unchanged
-    request will not fix a validation or constraint failure.
+    `APIError.code` is a five-character SQLSTATE, a PostgREST `PGRSTxxx` code,
+    or the raw HTTP status when the error body is not JSON. PostgREST's group 0
+    (`PGRST0xx`) means it could not reach the database and answers 503.
     """
-    code = exc.code
-    if code is not None and str(code).isdigit() and int(code) >= 500:
+    code = str(exc.code or "")
+    if code.startswith("PGRST0"):
+        return SinkTransientError(str(exc))
+    if len(code) == 5 and code[:2] in _TRANSIENT_SQLSTATE_CLASSES:
+        return SinkTransientError(str(exc))
+    if len(code) == 3 and code.isdigit() and int(code) >= 500:
         return SinkTransientError(str(exc))
     return SinkPermanentError(str(exc))
