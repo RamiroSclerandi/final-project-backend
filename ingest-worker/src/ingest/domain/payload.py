@@ -1,10 +1,4 @@
-"""Pydantic models for the frozen `datalogger.v1` MQTT payload contract.
-
-This module enforces the frozen field table: reject any `v` other than 1,
-`dev` must be 12 uppercase hex characters, `ch[].val` is required exactly
-when `ch[].ok` is true, and `ch[].min`/`max`/`n` only appear together when
-`n > 1`.
-"""
+"""Pydantic models for the frozen `datalogger.v1` MQTT payload contract."""
 
 import re
 from typing import Literal

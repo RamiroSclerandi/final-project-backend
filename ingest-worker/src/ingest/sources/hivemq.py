@@ -1,15 +1,6 @@
-"""HiveMQ Cloud source: paho-mqtt v2 client, TLS, bounded queue.
+"""HiveMQ Cloud source: paho-mqtt v2 client over TLS feeding bounded queues.
 
-`on_connect(client, userdata, flags, reason_code, properties)` and
-`on_disconnect`/`on_subscribe` use the paho v2 callback signatures
-(`CallbackAPIVersion.VERSION2`); `on_message(client, userdata, message)` is
-unchanged from v1.
-
-`on_message` runs on paho's own network thread and must never block on slow
-work: it only measures payload size and puts a value onto one of the two
-bounded queues below. All other I/O (archiving, parsing, persistence)
-belongs to a separate writer thread that drains
-`inbound_queue`/`status_queue`.
+`on_message` runs on paho's network thread: it only checks size and enqueues.
 """
 
 import logging
@@ -28,8 +19,7 @@ from ingest.sources.base import DeviceStatus, InboundMessage, device_mac_from_to
 
 logger = logging.getLogger(__name__)
 
-# Exponential backoff bounds for paho's built-in reconnect: start at 1s,
-# cap at 60s, reset to 1s on the next successful CONNACK.
+# paho's reconnect backoff, reset on the next successful CONNACK.
 _RECONNECT_MIN_DELAY_S = 1
 _RECONNECT_MAX_DELAY_S = 60
 
@@ -43,11 +33,7 @@ class MqttAuthenticationError(RuntimeError):
 
 
 def _parse_online_offline(payload: bytes) -> bool:
-    """Parse a retained status payload into an online flag.
-
-    Raises:
-        ValueError: If the payload is not exactly `online` or `offline`.
-    """
+    """Parse a retained status payload; ValueError unless `online` or `offline`."""
     text = payload.decode("utf-8").strip().lower()
     if text == "online":
         return True
@@ -57,13 +43,7 @@ def _parse_online_offline(payload: bytes) -> bool:
 
 
 class HiveMQSource:
-    """paho-mqtt v2 based `MessageSource` implementation for HiveMQ Cloud.
-
-    Implements the `MessageSource` protocol (`sources/base.py`) structurally:
-    `start()`, `stop()`, `inbound_queue`. Also exposes `status_queue` for the
-    retained device online/offline topic, which this slice parses but does
-    not persist — no sink exists yet.
-    """
+    """`MessageSource` for HiveMQ Cloud; also queues retained device status."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -81,9 +61,7 @@ class HiveMQSource:
             client_id=settings.mqtt_client_id,
         )
         self._client.username_pw_set(settings.mqtt_user, settings.mqtt_password.get_secret_value())
-        # Empty MQTT_CA_CERT_PATH means the default system/certifi CA bundle;
-        # a configured path pins a custom CA. tls_insecure_set is never
-        # called.
+        # Empty MQTT_CA_CERT_PATH uses the system CA bundle; verification is never disabled.
         self._client.tls_set(ca_certs=settings.mqtt_ca_cert_path or None)
         self._client.reconnect_delay_set(
             min_delay=_RECONNECT_MIN_DELAY_S, max_delay=_RECONNECT_MAX_DELAY_S
@@ -94,11 +72,7 @@ class HiveMQSource:
         self._client.on_subscribe = self._on_subscribe
 
     def start(self) -> None:
-        """Connect to the broker and block, delivering messages until `stop()`.
-
-        Raises:
-            MqttAuthenticationError: If the broker rejected the credentials.
-        """
+        """Connect and block until `stop()`; MqttAuthenticationError on bad credentials."""
         self._client.connect(self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60)
         self._client.loop_forever()
         if self._auth_failure is not None:
@@ -147,10 +121,7 @@ class HiveMQSource:
                 self._auth_failure = str(reason_code)
                 client.disconnect()
             return
-        # Subscriptions are issued here every time on_connect fires —
-        # including after an automatic reconnect — never once at startup.
-        # Correct whether or not the broker restores subscriptions, and
-        # eliminates the connected-but-deaf failure mode.
+        # Subscribe on every connect, reconnects included, so the worker is never deaf.
         client.subscribe(self._settings.mqtt_topic_data, qos=0)
         client.subscribe(self._settings.mqtt_topic_status, qos=0)
         logger.info(

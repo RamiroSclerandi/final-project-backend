@@ -1,25 +1,9 @@
-"""Structured logging and in-process metrics for the ingestion worker.
+"""Structured JSON logging and in-process metrics.
 
-This module is deliberately self-contained: it owns exactly the
-counters that have no existing home elsewhere. The transport's
-`dropped_count`/`oversized_count` (`ingest.sources.hivemq.HiveMQSource`) and
-the sink's `batches_written_count`/`batch_retries_count`/
-`batch_failed_count`/`duplicates_skipped_count`
-(`ingest.sink.supabase_sink.MeasurementSink`) already exist —
-`build_metrics_snapshot` surfaces them instead of duplicating their state,
-so each counter is incremented in exactly one place.
-
-Wiring `record_*` calls and `SeqGapTracker.observe()` into the running
-transport/sink is the composition root's job; this module only exposes the
-standalone units it drives.
-
-The `(boot, seq)` gap itself has two independent implementations by design:
-the live `SeqGapTracker` below is a non-authoritative,
-in-process early signal that cannot observe a gap caused by the worker being
-down; the authoritative check is `docs/queries/seq_gaps.sql`, a SQL query
-over the persisted `measurements` table. `compute_seq_gaps` is a Python port
-of that exact query, kept here so its `SELECT DISTINCT`-before-window-
-function contract is unit-testable without a live Postgres connection.
+Counters owned by the source and sink are read by `build_metrics_snapshot`,
+never duplicated here. `SeqGapTracker` is a live, non-authoritative signal;
+the authoritative check is `docs/queries/seq_gaps.sql`, which
+`compute_seq_gaps` ports for testing.
 """
 
 import json
@@ -36,12 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class JsonLogFormatter(logging.Formatter):
-    """Renders one JSON object per log line.
-
-    Every structured field passed to `log_event` ends up as a top-level key
-    alongside `timestamp`/`level`/`logger`/`event`, so a log aggregator can
-    parse each line without a custom grammar.
-    """
+    """One JSON object per line, with `log_event` fields as top-level keys."""
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
@@ -57,16 +36,7 @@ class JsonLogFormatter(logging.Formatter):
 
 
 def configure_logging(level: str) -> None:
-    """Configure the root logger for one JSON object per line on stdout.
-
-    This worker is a containerized, long-lived process with stdout as its
-    only log transport — never a file, never
-    rotation, never a logging framework beyond the standard library.
-
-    Args:
-        level: A standard logging level name (`Settings.log_level`, i.e.
-            `LOG_LEVEL`), case-insensitive.
-    """
+    """Log JSON lines to stdout, the container's only log transport."""
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(JsonLogFormatter())
     root = logging.getLogger()
@@ -75,31 +45,13 @@ def configure_logging(level: str) -> None:
 
 
 def log_event(event: str, level: int = logging.INFO, **fields: object) -> None:
-    """Emit one structured log record.
-
-    Callers pass identifiers, topics, sizes, and counts as keyword fields —
-    never a raw payload or a secret value (`SUPABASE_SERVICE_ROLE_KEY`,
-    `MQTT_PASSWORD`). There is no "log the payload" helper in this module on
-    purpose: computing `size=len(payload)` at the call site is what a caller
-    needs, and it is also all that can safely reach a log line.
-
-    Args:
-        event: A short, stable event name (e.g. `"message_dropped"`).
-        level: A `logging` level constant. Defaults to `INFO`.
-        **fields: Structured fields merged into the JSON record.
-    """
+    """Emit one structured record; pass ids, sizes and counts, never payloads or secrets."""
     logger.log(level, event, extra={"ingest_fields": fields})
 
 
 @dataclass
 class Metrics:
-    """In-process counters this module is the sole source of truth for.
-
-    Everything else the worker already counts (queue drops, oversized
-    payloads, batch outcomes, duplicates skipped) is surfaced by
-    `build_metrics_snapshot` from its existing owner instead of being
-    duplicated here — see the module docstring.
-    """
+    """Counters this module owns; the source and sink keep their own."""
 
     messages_received_data_total: int = 0
     messages_received_status_total: int = 0
@@ -116,14 +68,7 @@ class Metrics:
         return self.messages_received_data_total + self.messages_received_status_total
 
     def record_message_received(self, kind: str) -> None:
-        """Record one message received on the data or status topic.
-
-        Args:
-            kind: `"data"` or `"status"`.
-
-        Raises:
-            ValueError: If `kind` is neither.
-        """
+        """Count one message from the `data` or `status` topic."""
         if kind == "data":
             self.messages_received_data_total += 1
         elif kind == "status":
@@ -136,16 +81,7 @@ class Metrics:
         self.raw_messages_archived_total += 1
 
     def record_measurement_rows(self, submitted: int, written: int) -> None:
-        """Record one batch's submitted and actually-written row counts.
-
-        Args:
-            submitted: Rows sent to `upsert_measurements`.
-            written: Rows the upsert response actually returned
-                (`submitted - written` is the exact duplicate count, already
-                tracked by `MeasurementSink.duplicates_skipped_count` and
-                surfaced by `build_metrics_snapshot` — this records the two
-                inputs, not a third derived counter).
-        """
+        """Add one batch's submitted and written row counts."""
         self.measurements_rows_submitted_total += submitted
         self.measurements_rows_written_total += written
 
@@ -186,20 +122,7 @@ def build_metrics_snapshot(
     source: SourceCounters | None = None,
     sink: SinkCounters | None = None,
 ) -> dict[str, int]:
-    """Merge this registry's own counters with the source's and sink's.
-
-    Args:
-        metrics: This module's owned counters.
-        source: The running `HiveMQSource`, if available. Its
-            `dropped_count`/`oversized_count` are read directly, not
-            duplicated.
-        sink: The running `MeasurementSink`, if available. Its batch and
-            duplicate counters are read directly, not duplicated.
-
-    Returns:
-        A flat `{counter_name: value}` mapping. A counter is present only
-        when its owner was passed.
-    """
+    """Merge these counters with the source's and sink's, when given."""
     snapshot: dict[str, int] = {
         "mqtt_messages_received_total": metrics.messages_received_total,
         "raw_messages_archived_total": metrics.raw_messages_archived_total,
@@ -230,51 +153,20 @@ def log_metrics_snapshot(
 
 
 def count_failed_channels(payload: DataloggerV1) -> int:
-    """Count channels with `ok: false` in one validated envelope.
-
-    There is no persisted metric for per-channel failure rate, because a
-    failed channel produces no `measurements` row (see
-    `ingest.domain.normalize`) and becomes invisible again once the raw
-    message is archived.
-
-    Args:
-        payload: A validated `datalogger.v1` envelope.
-
-    Returns:
-        The number of channels in this message that reported `ok: false`.
-    """
+    """Count channels with `ok: false`; they leave no row to count later."""
     return sum(1 for channel in payload.ch if not channel.ok)
 
 
 class SeqGapTracker:
-    """Live, non-authoritative `(boot, seq)` signal, per device.
-
-    This is a convenience early-warning signal only, computed while the
-    worker is running. It CANNOT observe a gap that occurred while the
-    worker was down, which is why the
-    authoritative check is `compute_seq_gaps`/`docs/queries/seq_gaps.sql`
-    over the persisted `measurements` table instead.
-    """
+    """Live per-device `(boot, seq)` gap signal; blind to gaps while the worker is down."""
 
     def __init__(self) -> None:
         self._last: dict[str, tuple[int, int]] = {}
 
     def observe(self, device_mac: str, boot: int, seq: int) -> bool:
-        """Record one message's `(boot, seq)` for a device.
+        """Record one message's `(boot, seq)`; True on a jump within the same boot.
 
-        Call this once per MESSAGE, not once per channel/reading: multiple
-        channels in one message share a single `seq` value, and calling
-        this per-reading would compare a seq value against itself.
-
-        Args:
-            device_mac: The device's MAC address.
-            boot: The device's boot counter for this message.
-            seq: The device's sequence counter for this message.
-
-        Returns:
-            `True` if `seq` jumped by more than 1 since the last message
-            from this device within the same `boot`. A boot change resets
-            the sequence and is never reported as a gap.
+        Call once per message, not per channel: channels share one `seq`.
         """
         previous = self._last.get(device_mac)
         self._last[device_mac] = (boot, seq)
@@ -288,11 +180,7 @@ class SeqGapTracker:
 
 @dataclass(frozen=True)
 class SeqReading:
-    """One `measurements` row's identity for gap detection.
-
-    Mirrors exactly the columns `docs/queries/seq_gaps.sql` reads:
-    `devices.mac_address`, `measurements.boot`, `measurements.seq`.
-    """
+    """The columns `docs/queries/seq_gaps.sql` reads for one row."""
 
     device_mac: str
     boot: int
@@ -315,23 +203,10 @@ class SeqGap:
 
 
 def compute_seq_gaps(rows: Iterable[SeqReading]) -> list[SeqGap]:
-    """Python port of `docs/queries/seq_gaps.sql`, for testing without Postgres.
+    """Python port of `docs/queries/seq_gaps.sql`.
 
-    `measurements` holds one row per CHANNEL of one message, so `seq`
-    repeats once per channel within a message. Rows are first reduced to
-    distinct `(device_mac, boot, seq)` triples — exactly the query's
-    `SELECT DISTINCT` step — before comparing consecutive values; skipping
-    that step would let a multi-channel message's duplicate rows distort
-    the comparison.
-
-    Args:
-        rows: Candidate `measurements` rows, already joined to their
-            device's `mac_address`.
-
-    Returns:
-        One `SeqGap` per discontinuity, ordered by device then boot then
-        seq. A `boot` change never produces a gap — it means the device
-        restarted and its sequence legitimately reset.
+    Rows are first deduplicated, like the query's `SELECT DISTINCT`, because
+    every channel of a message repeats its `seq`.
     """
     distinct_rows = sorted({(row.device_mac, row.boot, row.seq) for row in rows})
     gaps: list[SeqGap] = []

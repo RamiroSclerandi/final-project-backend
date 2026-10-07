@@ -1,10 +1,4 @@
-"""Transport seam between the MQTT broker and the ingestion pipeline.
-
-`MessageSource` is the protocol every message source implements (HiveMQ
-today; a future LoRaWAN/TTN transport is explicitly out of scope). The seam
-exists so the rest of the worker never imports paho-mqtt directly, and so
-the queueing/dropping/counting behavior is testable without a live broker.
-"""
+"""Transport seam: keeps paho-mqtt out of the rest of the worker."""
 
 import queue
 from dataclasses import dataclass
@@ -14,13 +8,7 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class InboundMessage:
-    """One raw MQTT data envelope handed from the transport to the writer.
-
-    Carries the raw topic and payload bytes, not a parsed reading. This keeps
-    the network thread's callback O(1) and makes the queue bound expressible
-    in bytes:
-    `INGEST_QUEUE_MAX * MQTT_MAX_PAYLOAD_BYTES`.
-    """
+    """Raw data envelope; carrying bytes keeps the network callback O(1)."""
 
     topic: str
     payload: bytes
@@ -29,13 +17,7 @@ class InboundMessage:
 
 @dataclass(frozen=True)
 class DeviceStatus:
-    """One parsed retained status envelope from a device's status topic.
-
-    Unlike `InboundMessage` this is already parsed into `online`/`offline` —
-    the status contract is two values, not the full `datalogger.v1` schema —
-    but it is still not written to the database in this slice; no sink
-    exists yet.
-    """
+    """Parsed retained `online`/`offline` status of one device."""
 
     device_mac: str
     online: bool
@@ -43,24 +25,14 @@ class DeviceStatus:
 
 
 class MessageSource(Protocol):
-    """A running message source: connects, subscribes, and queues raw envelopes.
+    """A running message source.
 
-    Threading contract: `start()` and `stop()` are called from the main
-    thread. Once started, the transport delivers messages on its own network
-    thread; that thread only validates payload size and puts an
-    `InboundMessage` onto the bounded `inbound_queue` — it never performs
-    database I/O or blocks on anything slow. A separate consumer (writer)
-    thread drains `inbound_queue`. `queue.Queue` is thread-safe on its own
-    and needs no external lock for the handoff itself.
+    `start()`/`stop()` run on the main thread. Messages arrive on the transport's
+    own thread, which only enqueues and never does database I/O.
     """
 
     def start(self) -> None:
-        """Connect to the broker and begin receiving messages.
-
-        Blocks the calling thread for the lifetime of the connection; the
-        composition root is expected to run this on the main thread so
-        Python delivers OS signals to it.
-        """
+        """Connect and block until `stop()`; run on the main thread so it gets OS signals."""
         ...
 
     def stop(self) -> None:
